@@ -1,0 +1,9 @@
+name = "BlockOptInterface"
+uuid = "2c3d953e-07eb-42f7-9900-e75950e41d88"
+authors = ["jalving <jhjalving@gmail.com>"]
+version = "0.1.0"
+
+[deps]
+DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
+Lazy = "50d2b5c4-7a5e-59d5-8109-a42b560f39c0"
+MathOptInterface = "b8f27783-ece8-5eb3-8dc8-9495eed66fee"
