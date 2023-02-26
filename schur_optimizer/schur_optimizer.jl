@@ -8,9 +8,6 @@ const MOI = MathOptInterface
 using BlockOptInterface
 const BOI = BlockOptInterface
 
-
-### _EmptyNLPEvaluator
-
 struct _EmptyNLPEvaluator <: MOI.AbstractNLPEvaluator end
 
 MOI.features_available(::_EmptyNLPEvaluator) = [:Grad, :Jac, :Hess]
@@ -20,37 +17,6 @@ MOI.jacobian_structure(::_EmptyNLPEvaluator) = Tuple{Int64,Int64}[]
 MOI.hessian_lagrangian_structure(::_EmptyNLPEvaluator) = Tuple{Int64,Int64}[]
 MOI.eval_constraint_jacobian(::_EmptyNLPEvaluator, J, x) = nothing
 MOI.eval_hessian_lagrangian(::_EmptyNLPEvaluator, H, x, σ, μ) = nothing
-
-
-mutable struct NodeModel <: BOI.NodeModelLike
-    variables::MOI.Utilities.VariablesContainer{Float64}
-    variable_primal_start::Vector{Union{Nothing,Float64}}
-    mult_x_L::Vector{Union{Nothing,Float64}}
-    mult_x_U::Vector{Union{Nothing,Float64}}
-end
-function NodeModel()
-    return NodeModel(        
-        MOI.Utilities.VariablesContainer{Float64}(),
-        Union{Nothing,Float64}[],
-        Union{Nothing,Float64}[],
-        Union{Nothing,Float64}[]
-    )
-end
-
-mutable struct EdgeModel <: BOI.EdgeModelLike
-    qp_data::QPBlockData{Float64}
-    nlp_dual_start::Union{Nothing,Vector{Float64}}
-    nlp_data::MOI.NLPBlockData
-    sense::MOI.OptimizationSense
-end
-function EdgeModel()
-    return EdgeModel(
-        QPBlockData{Float64}(),
-        nothing,
-        MOI.NLPBlockData([], _EmptyNLPEvaluator(), false),
-        MOI.FEASIBILITY_SENSE
-    )
-end
 
 """
     SchurOptimizer()
@@ -69,8 +35,6 @@ mutable struct SchurOptimizer <: BOI.AbstractBlockOptimizer
     solve_iterations::Int
     sense::MOI.OptimizationSense
 
-    # IDEA: update the partition information as we build the model
-    # partition::TwoStagePartition
     block::BOI.Block
 end
 
@@ -94,6 +58,37 @@ function SchurOptimizer(; kwargs...)
     )
 end
 
+mutable struct NodeModel <: BOI.NodeModelLike
+    variables::MOI.Utilities.VariablesContainer{Float64}
+    variable_primal_start::Vector{Union{Nothing,Float64}}
+    mult_x_L::Vector{Union{Nothing,Float64}}
+    mult_x_U::Vector{Union{Nothing,Float64}}
+end
+function NodeModel(optimizer::SchurOptimizer)
+    return NodeModel(
+        MOI.Utilities.VariablesContainer{Float64}(),
+        Union{Nothing,Float64}[],
+        Union{Nothing,Float64}[],
+        Union{Nothing,Float64}[]
+    )
+end
+
+mutable struct EdgeModel <: BOI.EdgeModelLike
+    qp_data::QPBlockData{Float64}
+    nlp_dual_start::Union{Nothing,Vector{Float64}}
+    nlp_data::MOI.NLPBlockData
+    sense::MOI.OptimizationSense
+end
+function EdgeModel(optimizer::SchurOptimizer)
+    return EdgeModel(
+        QPBlockData{Float64}(),
+        nothing,
+        MOI.NLPBlockData([], _EmptyNLPEvaluator(), false),
+        MOI.FEASIBILITY_SENSE
+    )
+end
+
+
 const _SETS = Union{MOI.GreaterThan{Float64},MOI.LessThan{Float64},MOI.EqualTo{Float64}}
 
 const _FUNCTIONS = Union{
@@ -101,29 +96,29 @@ const _FUNCTIONS = Union{
     MOI.ScalarQuadraticFunction{Float64},
 }
 
-function BOI.add_node!(model::SchurOptimizer, index::BOI.BlockIndex)
-    block = model.block.block_by_index[index]
-    return BOI.add_node!(block, NodeModel())
+function BOI.add_node!(optimizer::SchurOptimizer, index::BOI.BlockIndex)
+    block = optimizer.block.block_by_index[index]
+    node = BOI.add_node!(block, NodeModel(optimizer))
 end
 
-function BOI.add_edge!(model::SchurOptimizer, index::BOI.BlockIndex, node::BOI.Node)
-    block = model.block.block_by_index[index]
-    return BOI.add_edge!(block, node, EdgeModel())
+function BOI.add_edge!(optimizer::SchurOptimizer, index::BOI.BlockIndex, node::BOI.Node)
+    block = optimizer.block.block_by_index[index]
+    return BOI.add_edge!(block, node, EdgeModel(optimizer))
 end
 
-function BOI.add_edge!(model::SchurOptimizer, index::BOI.BlockIndex, nodes::NTuple{N, BOI.Node} where N)
-    block = model.block.block_by_index[index]
-    return BOI.add_edge!(block, nodes, EdgeModel())
+function BOI.add_edge!(optimizer::SchurOptimizer, index::BOI.BlockIndex, nodes::NTuple{N, BOI.Node} where N)
+    block = optimizer.block.block_by_index[index]
+    return BOI.add_edge!(block, nodes, EdgeModel(optimizer))
 end
 
-function BOI.add_edge!(model::SchurOptimizer, index::BOI.BlockIndex, blocks::NTuple{N, BOI.Block} where N)
-    block = model.block.block_by_index[index]
-    return BOI.add_edge!(block, blocks, EdgeModel())
+function BOI.add_edge!(optimizer::SchurOptimizer, index::BOI.BlockIndex, blocks::NTuple{N, BOI.Block} where N)
+    block = optimizer.block.block_by_index[index]
+    return BOI.add_edge!(block, blocks, EdgeModel(optimizer))
 end
 
-function BOI.add_edge!(model::SchurOptimizer, index::BOI.BlockIndex, node::BOI.Node, block::BOI.Block)
-    parent_block = model.block.block_by_index[index]
-    return BOI.add_edge!(parent_block, node, block, EdgeModel())
+function BOI.add_edge!(optimizer::SchurOptimizer, index::BOI.BlockIndex, node::BOI.Node, block::BOI.Block)
+    parent_block = optimizer.block.block_by_index[index]
+    return BOI.add_edge!(parent_block, node, block, EdgeModel(optimizer))
 end
 
 # TODO: figure out whether we can do these
@@ -249,7 +244,7 @@ function MOI.get(
     return MOI.get(node.variables, attr, ci)
 end
 
-function MOI.add_constraint(node::BOI.Node, x::MOI.VariableIndex, set::_SETS)
+function MOI.add_constraint(node::NodeModel, x::MOI.VariableIndex, set::_SETS)
     index = MOI.add_constraint(node.variables, x, set)
     # model.solver = nothing
     return index
@@ -293,15 +288,16 @@ function MOI.is_valid(
     edge::EdgeModel,
     ci::MOI.ConstraintIndex{<:_FUNCTIONS,<:_SETS},
 )
-    return MOI.is_valid(edge.model.qp_data, ci)
+    return MOI.is_valid(edge.qp_data, ci)
 end
 
 function MOI.add_constraint(
-    model::EdgeModel,
+    edge::EdgeModel,
     func::_FUNCTIONS, 
     set::_SETS
 )
-    index = MOI.add_constraint(edge.model.qp_data, func, set)
+    # TODO: variable mapping
+    index = MOI.add_constraint(edge.qp_data, func, set)
     #model.solver = nothing
     return index
 end
@@ -310,7 +306,7 @@ function MOI.get(
     edge::EdgeModel,
     attr::Union{MOI.NumberOfConstraints{F,S},MOI.ListOfConstraintIndices{F,S}},
 ) where {F<:_FUNCTIONS,S<:_SETS}
-    return MOI.get(edge.model.qp_data, attr)
+    return MOI.get(edge.qp_data, attr)
 end
 
 function MOI.get(
@@ -322,7 +318,7 @@ function MOI.get(
     },
     ci::MOI.ConstraintIndex{F,S},
 ) where {F<:_FUNCTIONS,S<:_SETS}
-    return MOI.get(edge.model.qp_data, attr, ci)
+    return MOI.get(edge.qp_data, attr, ci)
 end
 
 function MOI.set(
@@ -331,7 +327,7 @@ function MOI.set(
     ci::MOI.ConstraintIndex{F,S},
     set::S,
 ) where {F<:_FUNCTIONS,S<:_SETS}
-    MOI.set(edge.model.qp_data, MOI.ConstraintSet(), ci, set)
+    MOI.set(edge.qp_data, MOI.ConstraintSet(), ci, set)
     #model.solver = nothing
     return
 end
@@ -351,7 +347,7 @@ function MOI.set(
     value::Union{Real,Nothing},
 ) where {F<:_FUNCTIONS,S<:_SETS}
     MOI.throw_if_not_valid(model, ci)
-    MOI.set(edge.model.qp_data, attr, ci, value)
+    MOI.set(edge.qp_data, attr, ci, value)
     # No need to reset model.solver, because this gets handled in optimize!.
     return
 end
@@ -494,25 +490,159 @@ function MOI.eval_hessian_lagrangian(edge::EdgeModel, H, x, σ, μ)
     return
 end
 
-function MOIModel(optimizer::SchurOptimizer)
-end
+# We might not need this anymore
+# struct BlockMOIModel{T} <: AbstractNLPModel{T,Vector{T}}
+#     ninds::Vector{UnitRange{Int}}
+#     minds::Vector{UnitRange{Int}}
+#     pinds::Vector{UnitRange{Int}}
+#     nnzs_jac_inds::Vector{UnitRange{Int}}
+#     nnzs_hess_inds::Vector{UnitRange{Int}}
+#     nnzs_link_jac_inds::Vector{UnitRange{Int}}
 
-# Optimize!
-function MOI.optimize!(model::SchurOptimizer)
-    model.nlp = MOIModel(model)
-    if model.silent
-        model.options[:print_level] = MadNLP.ERROR
+#     x_index_map::Dict
+#     g_index_map::Dict
+
+#     meta::NLPModelMeta{T, Vector{T}}
+#     counters::MadNLP.NLPModels.Counters
+#     ext::Dict{Symbol,Any}
+# end
+
+function MOIModel(model::SchurOptimizer)
+
+    # initialize NLP evaluators
+    for edge in all_edges(model)
+        :Hess in MOI.features_available(model.nlp_data.evaluator) || error("Hessian information is needed.")
+        MOI.initialize(edge.nlp_data.evaluator, [:Grad,:Hess,:Jac])
     end
 
-    # TODO: recursive linear solver
-    partitions = get_block_partitions(model)
-    model.solver = MadNLP.MadNLPSolver(
-        model.nlp; 
-        linear_solver=MadNLPSchur(partitions), 
-        model.options...
-    )
-    model.result = solve!(model.solver)
-    model.solve_time = model.solver.cnt.total_time
-    model.solve_iterations = model.solver.cnt.k
-    return
+    # Initial variable
+    nvar = length(model.variables.lower)
+    x0  = Vector{Float64}(undef,nvar)
+    for i in 1:length(model.variable_primal_start)
+        x0[i] = if model.variable_primal_start[i] !== nothing
+            model.variable_primal_start[i]
+        else
+            clamp(0.0, model.variables.lower[i], model.variables.upper[i])
+        end
+    end
+
+    # Constraints bounds
+    g_L, g_U = copy(model.qp_data.g_L), copy(model.qp_data.g_U)
+    for bound in model.nlp_data.constraint_bounds
+        push!(g_L, bound.lower)
+        push!(g_U, bound.upper)
+    end
+    ncon = length(g_L)
+
+    # Sparsity
+    jacobian_sparsity = MOI.jacobian_structure(model)
+    hessian_sparsity = MOI.hessian_lagrangian_structure(model)
+    nnzh = length(hessian_sparsity)
+    nnzj = length(jacobian_sparsity)
+
+    # Dual multipliers
+    y0 = Vector{Float64}(undef,ncon)
+    for (i, start) in enumerate(model.qp_data.mult_g)
+        y0[i] = _dual_start(model, start, -1)
+    end
+    offset = length(model.qp_data.mult_g)
+    if model.nlp_dual_start === nothing
+        y0[(offset+1):end] .= 0.0
+    else
+        for (i, start) in enumerate(model.nlp_dual_start::Vector{Float64})
+            y0[offset+i] = _dual_start(model, start, -1)
+        end
+    end
+
+
+    # TODO
+    model.options[:jacobian_constant], model.options[:hessian_constant] = false, false
+    model.options[:dual_initialized] = !iszero(y0)
+
+    return MOIModel(
+        NLPModelMeta(
+            nvar,
+            x0 = x0,
+            lvar = model.variables.lower,
+            uvar = model.variables.upper,
+            ncon = ncon,
+            y0 = y0,
+            lcon = g_L,
+            ucon = g_U,
+            nnzj = nnzj,
+            nnzh = nnzh,
+            minimize = model.sense == MOI.MIN_SENSE
+        ),
+        model,NLPModels.Counters())
 end
+
+# # Optimize!
+# function MOI.optimize!(model::SchurOptimizer)
+#     model.nlp = MOIModel(model)
+#     if model.silent
+#         model.options[:print_level] = MadNLP.ERROR
+#     end
+
+#     partitions = get_block_partitions(model)
+
+#     schur_options = SchurLinearOptions()
+
+#     model.solver = MadNLP.MadNLPSolver(
+#         model.nlp; 
+#         linear_solver=SchurLinearSolver,
+#         model.options...
+#     )
+#     model.result = solve!(model.solver)
+#     model.solve_time = model.solver.cnt.total_time
+#     model.solve_iterations = model.solver.cnt.k
+#     return
+# end
+
+# # Schur optimizer needs a two-stage partition
+# function get_block_partitions(optimizer::SchurOptimizer)
+
+#     # IDEA: use block to get indices
+#     # pinds should come from linking edges
+
+#     n = nlp.ext[:n]
+#     m = nlp.ext[:m]
+#     p = nlp.ext[:p]
+
+#     ninds = nlp.ninds
+#     minds = nlp.minds
+#     pinds = nlp.pinds
+
+
+
+#     # this is an NLP function. try getting this from the block
+#     ind_ineq = findall(get_lcon(nlp).!=get_ucon(nlp))
+#     l = length(ind_ineq)
+
+#     partition = Vector{Int}(undef,n+m+l+p)
+
+#     for k=1:length(ninds)
+#         part[ninds[k]].=k
+#     end
+#     for k=1:length(minds)
+#         part[minds[k].+n.+l].=k
+#     end
+
+#     # loop through edges
+#     cnt = 0
+
+#     # for linkedge in nlp.ext[:linkedges]
+#     #     for (ind,con) in linkedge.linkconstraints
+#     #         cnt+=1
+#     #         attached_node_idx = graph.node_idx_map[con.attached_node]
+#     #         part[n+l+m+cnt] = attached_node_idx != nothing ? attached_node_idx : error("All the link constraints need to be attached to a node")
+#     #     end
+#     # end
+
+#     cnt = 0
+#     for q in ind_ineq
+#         cnt+=1
+#         part[n+cnt] = part[n+l+q]
+#     end
+
+#     return partition
+# end
