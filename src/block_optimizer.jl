@@ -9,17 +9,22 @@ mutable struct SchurOptimizer <: AbstractBlockOptimizer end
 """
 abstract type AbstractBlockOptimizer <: MOI.AbstractOptimizer end
 
+# Block optimizer interface
+function supports_block_interface(::MOI.AbstractOptimizer)
+    return false
+end
+
+function supports_block_interface(::AbstractBlockOptimizer)
+    return true
+end
 
 """
     AbstractBlockOptimizerAttribute
 Abstract supertype for attribute objects that can be used to set or get attributes (properties) of the block-structure-exploiting optimizer.
 """
-abstract type AbstractBlockAttribute <: MOI.AbstractModelAttribute end
+# abstract type AbstractBlockAttribute <: MOI.AbstractModelAttribute end
 
-# Block optimizer interface
-function supports_block_interface(::MOI.AbstractOptimizer)
-    return false
-end
+
 
 """
     BlockStructure()
