@@ -129,12 +129,6 @@ end
 
 MOI.get(::SchurOptimizer, ::MOI.SolverName) = "MadNLP.Schur"
 
-
-### MOI.ListOfConstraintTypesPresent
-function MOI.get(model::SchurOptimizer, attr::MOI.ListOfConstraintTypesPresent)
-    return MOI.get(model.block, attr)
-end
-
 ### MOI.Name
 
 MOI.supports(::SchurOptimizer, ::MOI.Name) = true
@@ -291,6 +285,13 @@ function MOI.is_valid(
     return MOI.is_valid(edge.qp_data, ci)
 end
 
+### MOI.ListOfConstraintTypesPresent
+
+function MOI.get(edge::EdgeModel, attr::MOI.ListOfConstraintTypesPresent)
+    return MOI.get(edge.qp_data, attr)
+end
+
+
 function MOI.add_constraint(
     edge::EdgeModel,
     func::_FUNCTIONS, 
@@ -372,6 +373,8 @@ MOI.get(edge::EdgeModel, ::MOI.NLPBlockDualStart) = edge.nlp_dual_start
 ### MOI.NLPBlock
 
 MOI.supports(::EdgeModel, ::MOI.NLPBlock) = true
+
+MOI.get(edge::EdgeModel, ::MOI.NLPBlock) = edge.nlp_data
 
 function MOI.set(edge::EdgeModel, ::MOI.NLPBlock, nlp_data::MOI.NLPBlockData)
     edge.nlp_data = nlp_data
