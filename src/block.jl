@@ -5,21 +5,23 @@ abstract type EdgeModelLike <: MOI.ModelLike end
 
 """
 	Node
-A block that supports variable data
+A set of variables. A node contains a `model` that implements the `NodeModelLike` interface.
 """
-struct Node #<: MOI.ModelLike
+struct Node
 	index::Int64
 	model::NodeModelLike
-	# local variable to block variable
-	variable_map::Dict{MOI.VariableIndex,MOI.VariableIndex}
+	# local variable inxed to block index
+	variable_map::OrderedDict{MOI.VariableIndex,MOI.VariableIndex}
 end
 
 # An edge can represent different types of coupling
-struct Edge{T<:Tuple} #<: MOI.ModelLike
+struct Edge{T<:Tuple}
 	index::Int64
 	elements::T # could be a node, nodes, blocks, or both
 	model::EdgeModelLike
-	constraint_map::Dict{MOI.ConstraintIndex,MOI.ConstraintIndex}
+
+	# local constraint index to block index
+	constraint_map::OrderedDict{MOI.ConstraintIndex,MOI.ConstraintIndex}
 end
 
 struct BlockIndex
@@ -44,14 +46,29 @@ mutable struct Block #<: BlockModelLike
 	end
 end
 
+# TODO: recursively check blocks
 function all_nodes(block::Block)
 	return block.nodes
 end
 
-# function num_variables(block::Block)
+function all_nodes(node::Node)
+	return [node]
+end
 
+function all_edges(block::Block)
+	return block.edges
+end
 
-# Interface Functions
+function all_nodes(edge::Edge)
+	nodes = []
+	for element in edge.elements
+		append!(nodes, all_nodes(element))
+	end
+	return nodes
+end
+
+### Interface Functions
+
 # add a node to a model on `AbstractBlock`
 function add_node!(::AbstractBlockOptimizer, ::BlockIndex) end
 
@@ -70,36 +87,6 @@ function add_edge!(::AbstractBlockOptimizer, ::BlockIndex, ::Node, ::Block) end
 # add a sub-block to block with `BlockIndex`
 function add_sub_block!(::AbstractBlockOptimizer, ::BlockIndex) end
 
-
-column(x::MOI.VariableIndex) = x.value
-
-function MOI.add_variable(optimizer::AbstractBlockOptimizer, node::Node)
-	local_var = MOI.add_variable(node.model)
-	# block index is the total number of variables
-	block_ind = MOI.get(optimizer.block, MOI.NumberOfVariables())
-	block_var = MOI.VariableIndex(block_ind)
-	node.variable_map[local_var] = block_var
-	return block_var
-end
-
-function MOI.add_variables(optimizer::AbstractBlockOptimizer, node::Node, n::Int64)
-	vars = MOI.VariableIndex[]
-	for _ = 1:n
-		vi = MOI.add_variable(optimizer, node)
-		push!(vars, vi)
-	end
-	return vars
-end
-
-@forward Node.model (MOI.get, MOI.set)
-@forward Edge.model (MOI.get, MOI.set)
-
-# TODO: number of constraints for each type
-function MOI.add_constraint(optimizer::AbstractBlockOptimizer, edge::Edge, func::F, set::S) where {F <: MOI.AbstractFunction, S <: MOI.AbstractSet}
-	ci = MOI.add_constraint(edge.model, func, set)
-	return ci
-end
-
 # Block functions
 function add_node!(block::Block, model::NodeModelLike)::Node
 	node = Node(length(block.nodes) + 1, model, Dict{MOI.VariableIndex,MOI.VariableIndex}())
@@ -107,6 +94,13 @@ function add_node!(block::Block, model::NodeModelLike)::Node
 	return node
 end
 
+function add_sub_block!(block::Block)::Block
+	sub_block = Block(length(block.sub_blocks) + 1)
+	push!(block.sub_blocks, sub_block)
+	return sub_block
+end
+
+# IDEA: one method that takes the edge object
 # Edges
 function add_edge!(block::Block, node::Node, model::EdgeModelLike)::Edge
 	index = length(block.edges) + 1
@@ -136,14 +130,64 @@ function add_edge!(block::Block, node::Node, sub_block::Block, model::EdgeModelL
 	return edge
 end
 
-function add_sub_block!(block::Block)::Block
-	sub_block = Block()
-	push!(block.sub_blcoks, sub_block)
-	return sub_block
+### Block Functions
+
+column(x::MOI.VariableIndex) = x.value
+
+function MOI.add_variable(optimizer::AbstractBlockOptimizer, node::Node)
+	local_vi = MOI.add_variable(node.model)
+	# block index is the total number of variables
+	block_index = MOI.get(optimizer.block, MOI.NumberOfVariables())
+	block_vi = MOI.VariableIndex(block_index)
+	node.variable_map[local_vi] = block_vi
+	return block_vi
 end
 
-# TODO: block interface
-# MOI functions over a `Block`
+function MOI.add_variables(optimizer::AbstractBlockOptimizer, node::Node, n::Int64)
+	vars = MOI.VariableIndex[]
+	for _ = 1:n
+		vi = MOI.add_variable(optimizer, node)
+		push!(vars, vi)
+	end
+	return vars
+end
+
+
+# forward methods so Node and Edge call their underlying model
+@forward Node.model (MOI.get, MOI.set)
+@forward Edge.model (MOI.get, MOI.set, MOI.eval_objective, MOI.eval_objective_gradient,
+	MOI.eval_constraint, MOI.jacobian_structure, MOI.eval_constraint_jacobian,
+	MOI.hessian_lagrangian_structure, MOI.eval_hessian_lagrangian
+)
+
+function MOI.add_constraint(optimizer::AbstractBlockOptimizer, 
+	edge::Edge,
+	func::F,
+	set::S
+) where {F <: MOI.AbstractFunction, S <: MOI.AbstractSet}
+	
+	local_ci = MOI.add_constraint(edge.model, func, set)
+	block_index = MOI.get(optimizer.block, MOI.NumberOfConstraints{F,S}())
+	block_ci = MOI.ConstraintIndex{F,S}(block_index)
+	edge.constraint_map[local_ci] = block_ci
+	return block_ci
+end
+
+function column_inds(node::Node)
+	return column.(values(node.variable_map))
+end
+
+function column_inds(edge::Edge)
+	nodes = all_nodes(edge)
+	inds = Int64[]
+	for node in nodes
+		append!(inds, column_inds(node))
+	end
+	return inds
+end
+
+
+### Block attributes
 function MOI.get(block::Block, attr::MOI.ListOfConstraintTypesPresent)
 	ret = []
 	for node in all_nodes(block)
@@ -155,18 +199,11 @@ function MOI.get(block::Block, attr::MOI.ListOfConstraintTypesPresent)
     return unique(ret)
 end
 
-function MOI.get(
-    block::Block,
-    attr::MOI.NumberOfVariables,
-)
+function MOI.get(block::Block, attr::MOI.NumberOfVariables)
     return sum(MOI.get(node, attr) for node in all_nodes(block))
 end
 
-
-function MOI.get(
-    block::Block,
-    attr::MOI.ListOfVariableIndices,
-)
+function MOI.get(block::Block, attr::MOI.ListOfVariableIndices)
 	var_list = []
 	for node in all_nodes(block)
 		append!(var_list, MOI.get(node, attr))
@@ -174,3 +211,10 @@ function MOI.get(
     return var_list
 end
 
+function MOI.get(
+    block::Block,
+    attr::MOI.NumberOfConstraints{F,S}
+) where {F <: MOI.AbstractFunction, S <: MOI.AbstractSet}
+
+    return sum(MOI.get(edge, attr) for edge in all_edges(block))
+end

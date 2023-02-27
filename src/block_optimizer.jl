@@ -1,22 +1,6 @@
 # Optimizers that inherit from AbstractBlockOptimizer use `Block` in addition to other MOI attributes.
 
-"""
-    AbstractBlockOptimizer
-Abstract supertype for block-structure-exploiting optimizers.
 
-e.g. create a Schur optimizer
-mutable struct SchurOptimizer <: AbstractBlockOptimizer end
-"""
-abstract type AbstractBlockOptimizer <: MOI.AbstractOptimizer end
-
-# Block optimizer interface
-function supports_block_interface(::MOI.AbstractOptimizer)
-    return false
-end
-
-function supports_block_interface(::AbstractBlockOptimizer)
-    return true
-end
 
 """
     AbstractBlockOptimizerAttribute
