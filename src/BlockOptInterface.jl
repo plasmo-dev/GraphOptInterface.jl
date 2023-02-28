@@ -2,6 +2,7 @@ module BlockOptInterface
 
 using MathOptInterface
 using DataStructures
+using SparseArrays
 using Lazy
 
 const MOI = MathOptInterface
