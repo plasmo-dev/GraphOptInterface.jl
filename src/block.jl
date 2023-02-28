@@ -155,10 +155,20 @@ end
 
 # forward methods so Node and Edge call their underlying model
 @forward Node.model (MOI.get, MOI.set)
-@forward Edge.model (MOI.get, MOI.set, MOI.eval_objective, MOI.eval_objective_gradient,
+@forward Edge.model (MOI.get, MOI.set, MOI.eval_objective_gradient,
 	MOI.eval_constraint, MOI.jacobian_structure, MOI.eval_constraint_jacobian,
 	MOI.hessian_lagrangian_structure, MOI.eval_hessian_lagrangian
 )
+
+# NOTE: we map the evaluation to the actual column indices on the edge
+function MOI.eval_objective(edge::Edge, x)
+	col_inds = column_inds(edge)
+	x_eval = SparseArrays.sparsevec(col_inds, x)
+	return MOI.eval_objective(edge.model, x_eval)
+end
+
+
+
 
 function MOI.add_constraint(optimizer::AbstractBlockOptimizer, 
 	edge::Edge,
