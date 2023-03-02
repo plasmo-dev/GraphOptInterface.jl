@@ -88,7 +88,6 @@ function EdgeModel(optimizer::SchurOptimizer)
     )
 end
 
-
 const _SETS = Union{MOI.GreaterThan{Float64},MOI.LessThan{Float64},MOI.EqualTo{Float64}}
 
 const _FUNCTIONS = Union{
@@ -96,6 +95,7 @@ const _FUNCTIONS = Union{
     MOI.ScalarQuadraticFunction{Float64},
 }
 
+# these functions should determine the block structure for the linear solver
 function BOI.add_node!(optimizer::SchurOptimizer, index::BOI.BlockIndex)
     block = optimizer.block.block_by_index[index]
     node = BOI.add_node!(block, NodeModel(optimizer))
