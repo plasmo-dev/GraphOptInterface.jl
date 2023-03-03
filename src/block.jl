@@ -10,7 +10,8 @@ A set of variables. A node contains a `model` that implements the `NodeModelLike
 """
 struct Node
 	index::Int64
-	model::NodeModelLike
+	variables::Vector{MOI.VariableIndex}
+	# model::NodeModelLike
 	# local variable indexed to block index
 	# variable_map::OrderedDict{MOI.VariableIndex,MOI.VariableIndex}
 end
@@ -116,13 +117,11 @@ function edge_variables(block::Block, edge::Edge{NTuple{1,Node}})
 	return MOI.get(edge.elements[1], MOI.ListOfVariableIndices())
 end
 
-# function edge_variables(block::Block, edge::Edge{NTuple{1,Node}}, nvis::Vector{NodeVariableIndex})
-# 	return edge_variable.(Ref(block), Ref(edge), nvis)
-# end
-
 function edge_variables(block::Block, edge::Edge, nvis::Vector{NodeVariableIndex})
 	return edge_variable.(Ref(block), Ref(edge), nvis)
 end
+
+### getters
 
 # TODO: recursively check blocks
 function all_nodes(block::Block)
@@ -255,26 +254,26 @@ function MOI.add_constraint(optimizer::AbstractBlockOptimizer,
 	return block_ci
 end
 
-function column_inds(node::Node)
-	return column.(values(node.variable_map))
-end
+# function column_inds(node::Node)
+# 	return column.(values(node.variable_map))
+# end
 
-function column_inds(edge::Edge)
-	nodes = all_nodes(edge)
-	inds = Int64[]
-	for node in nodes
-		append!(inds, column_inds(node))
-	end
-	return inds
-end
+# function column_inds(edge::Edge)
+# 	nodes = all_nodes(edge)
+# 	inds = Int64[]
+# 	for node in nodes
+# 		append!(inds, column_inds(node))
+# 	end
+# 	return inds
+# end
 
 
 ### Block attributes
 function MOI.get(block::Block, attr::MOI.ListOfConstraintTypesPresent)
 	ret = []
-	for node in all_nodes(block)
-		append!(ret, MOI.get(node.model, attr))
-	end
+	# for node in all_nodes(block)
+	# 	append!(ret, MOI.get(node.model, attr))
+	# end
 	for edge in get_edges(block)
 		append!(ret, MOI.get(edge.model, attr))
 	end

@@ -40,6 +40,9 @@ mutable struct BlockEvaluator{B} <: MOI.AbstractNLPEvaluator
 
         edge_data = Dict{Edge,EdgeData}()
 
+        num_vars = num_variables(block)
+        num_constraints = num_constraints(block)
+
         count_constraints = 0
         count_nnzh = 0
         count_nnzj = 0
@@ -49,8 +52,8 @@ mutable struct BlockEvaluator{B} <: MOI.AbstractNLPEvaluator
             MOI.initialize(nlp_data.evaluator, [:Grad,:Hess,:Jac])
             
             # edge columns
-            columns = column_inds(edge)
-            ninds = range(columns[1],columns[end])
+            # columns = column_inds(edge)
+            # ninds = range(columns[1],columns[end])
 
             # edge rows
             n_con_edge = num_constraints(edge)
