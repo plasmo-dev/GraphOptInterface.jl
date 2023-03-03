@@ -10,6 +10,11 @@ optimizer = SchurOptimizer()
 node1 = BOI.add_node!(optimizer, BOI.BlockIndex(0))
 MOI.add_variables(optimizer, node1, 3)
 
+# constraints/bounds on variables
+for x_i in x
+   MOI.add_constraint(optimizer, x_i, MOI.ZeroOne())
+end
+
 edge1 = BOI.add_edge!(optimizer, BOI.BlockIndex(0), node1)
 x1 = BOI.edge_variables(optimizer.block, edge1)
 
