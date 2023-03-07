@@ -1,15 +1,25 @@
+using Revise
+using Pkg
+Pkg.activate(@__DIR__())
 include("schur_optimizer.jl")
 
 using SparseArrays
 
 optimizer = SchurOptimizer()
+block = MOI.get(optimizer, BOI.BlockStructure())
 
 ##################################################
 # node 1 and edge 1
 ##################################################
-node1 = BOI.add_node!(optimizer, BOI.BlockIndex(0))
+node1 = BOI.add_node!(optimizer)
 x1 = MOI.add_variables(optimizer, node1, 3)
-edge1 = BOI.add_edge!(optimizer, BOI.BlockIndex(0), node1)
+
+# constraints/bounds on variables
+for x_i in x1
+   MOI.add_constraint(optimizer, node1, x_i, MOI.GreaterThan(0.0))
+end
+
+edge1 = BOI.add_edge!(optimizer, node1)
 
 c1 = [1.0, 2.0, 3.0]
 w1 = [0.3, 0.5, 1.0]
@@ -19,7 +29,7 @@ C1 = 3.2
 MOI.set(
 	edge1,
 	MOI.ObjectiveFunction{MOI.ScalarAffineFunction{Float64}}(),
-	MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.(c1, x1), 0.0),
+	MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.(c1, x1), 0.0)
 )
 MOI.set(edge1, MOI.ObjectiveSense(), MOI.MAX_SENSE)
 
@@ -28,7 +38,7 @@ ci = MOI.add_constraint(
     optimizer,
     edge1,
     MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.(w1, x1), 0.0),
-    MOI.LessThan(C1),
+    MOI.LessThan(C1)
 )
 
 # add edge1 nonlinear constraint
@@ -66,11 +76,15 @@ MOI.eval_hessian_lagrangian(edge1, hess_values1, x1_eval, 1.0, ones(2))
 ##################################################
 # node 2 and edge 2
 ##################################################
-node2 = BOI.add_node!(optimizer, BOI.BlockIndex(0))
+node2 = BOI.add_node!(optimizer)
 
 # NOTE: returns optimizer index, not node index
 x2 = MOI.add_variables(optimizer, node2, 3)
-edge2 = BOI.add_edge!(optimizer, BOI.BlockIndex(0), node2)
+for x_i in x2
+   MOI.add_constraint(optimizer, node2, x_i, MOI.GreaterThan(0.0))
+end
+
+edge2 = BOI.add_edge!(optimizer, node2)
 
 c2 = [2.0, 3.0, 4.0]
 w2 = [0.2, 0.1, 1.2]
@@ -125,25 +139,29 @@ MOI.eval_hessian_lagrangian(edge2, hess_values2, x2_eval, 1.0, ones(2))
 ##################################################
 edge3 = BOI.add_edge!(optimizer, BOI.BlockIndex(0), (node1, node2))
 
-x1_node = BOI.block_index.(Ref(node1), x1)
-x2_node = BOI.block_index.(Ref(node2), x2)
+# add variables to edge
+BOI.add_edge_variable!(optimizer.block, edge3, node1, node1[1])
+BOI.add_edge_variable!(optimizer.block, edge3, node2, node2[1])
+BOI.add_edge_variable!(optimizer.block, edge3, node2, node2[3])
+
+x3 = BOI.variable_indices(optimizer.block, edge3)
 
 MOI.add_constraint(
     optimizer,   
     edge3,
-    MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([1.0,-1.0], [x1_node[1],x2_node[1]]), 0.0),
+    MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([1.0,-1.0], [x3[1],x3[2]]), 0.0),
     MOI.EqualTo(0.0)
 )
 nlp3 = MOI.Nonlinear.Model()
-MOI.Nonlinear.add_constraint(nlp3, :(1 + sqrt($(x1_node[1])) + $(x2_node[3])^3), MOI.LessThan(5.0))
-evaluator3 = MOI.Nonlinear.Evaluator(nlp3, MOI.Nonlinear.SparseReverseMode(), [x1_node;x2_node])
+MOI.Nonlinear.add_constraint(nlp3, :(1 + sqrt($(x3[1])) + $(x3[3])^3), MOI.LessThan(5.0))
+evaluator3 = MOI.Nonlinear.Evaluator(nlp3, MOI.Nonlinear.SparseReverseMode(), x3)
 MOI.initialize(evaluator3, [:Grad, :Jac, :Hess])
 block3 = MOI.NLPBlockData(evaluator3)
 MOI.set(edge3, MOI.NLPBlock(), block3)
 
 # evaluate edge 3 NLP functions
 # specify a sparse vector of variable indices and values
-x3_eval = sparsevec([1, 4, 6], [1.0, 1.0, 1.0])
+x3_eval = [1.0, 1.0, 1.0]
 
 # objective
 edge3_obj = MOI.eval_objective(edge3, x3_eval)
@@ -153,7 +171,7 @@ g3_eval = zeros(2)
 MOI.eval_constraint(edge3, g3_eval, x3_eval)
 
 # gradient
-grad3_eval = zeros(6)
+grad3_eval = zeros(3)
 MOI.eval_objective_gradient(edge3, grad3_eval, x3_eval)
 
 # jacobian
@@ -166,22 +184,19 @@ hess_lag_structure3 = MOI.hessian_lagrangian_structure(edge3)
 hess_values3 = zeros(length(hess_lag_structure3))
 MOI.eval_hessian_lagrangian(edge3, hess_values3, x3_eval, 1.0, ones(2))
 
-##################################################
-# Block evaluator
-##################################################
-
-# block_evaluator = BOI.BlockEvaluator(optimizer.block)
+block_evaluator = BOI.BlockEvaluator(optimizer.block)
+MOI.initialize(block_evaluator, [:Grad, :Jac, :Hess])
 
 # x_block = ones(6)
 
 # # objective
 # block_obj = MOI.eval_objective(block_evaluator, x_block)
 
-# # constraints
-# g_block = zeros(6)
-# MOI.eval_constraint(block_evaluator, g_block, x_block)
+# # # constraints
+# c_block = zeros(6)
+# MOI.eval_constraint(block_evaluator, c_block, x_block)
 
-# # gradient
+# # # gradient
 # grad_block = zeros(6)
 # MOI.eval_objective_gradient(block_evaluator, grad_block, x_block)
 

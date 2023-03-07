@@ -88,6 +88,24 @@ function EdgeModel(optimizer::SchurOptimizer)
     )
 end
 
+function MOI.supports(optimizer::SchurOptimizer, ::BOI.BlockStructure)
+    return true
+end
+
+function MOI.get(optimizer::SchurOptimizer, ::BOI.BlockStructure)
+    return optimizer.block
+end
+
+function BOI.node_model(optimizer::SchurOptimizer)
+    return NodeModel(optimizer)
+end
+
+function BOI.edge_model(optimizer::SchurOptimizer)
+    return EdgeModel(optimizer)
+end
+
+
+
 const _SETS = Union{MOI.GreaterThan{Float64},MOI.LessThan{Float64},MOI.EqualTo{Float64}}
 
 const _FUNCTIONS = Union{
@@ -95,31 +113,32 @@ const _FUNCTIONS = Union{
     MOI.ScalarQuadraticFunction{Float64},
 }
 
-# these functions should determine the block structure for the linear solver
-function BOI.add_node!(optimizer::SchurOptimizer, index::BOI.BlockIndex)
-    block = optimizer.block.block_by_index[index]
-    node = BOI.add_node!(block, NodeModel(optimizer))
-end
 
-function BOI.add_edge!(optimizer::SchurOptimizer, index::BOI.BlockIndex, node::BOI.Node)
-    block = optimizer.block.block_by_index[index]
-    return BOI.add_edge!(block, node, EdgeModel(optimizer))
-end
 
-function BOI.add_edge!(optimizer::SchurOptimizer, index::BOI.BlockIndex, nodes::NTuple{N, BOI.Node} where N)
-    block = optimizer.block.block_by_index[index]
-    return BOI.add_edge!(block, nodes, EdgeModel(optimizer))
-end
+# function BOI.add_node!(optimizer::SchurOptimizer, index::BOI.BlockIndex)
+#     block = optimizer.block.block_by_index[index]
+#     node = BOI.add_node!(block, NodeModel(optimizer))
+# end
 
-function BOI.add_edge!(optimizer::SchurOptimizer, index::BOI.BlockIndex, blocks::NTuple{N, BOI.Block} where N)
-    block = optimizer.block.block_by_index[index]
-    return BOI.add_edge!(block, blocks, EdgeModel(optimizer))
-end
+# function BOI.add_edge!(optimizer::SchurOptimizer, index::BOI.BlockIndex, node::BOI.Node)
+#     block = optimizer.block.block_by_index[index]
+#     return BOI.add_edge!(block, node, EdgeModel(optimizer))
+# end
 
-function BOI.add_edge!(optimizer::SchurOptimizer, index::BOI.BlockIndex, node::BOI.Node, block::BOI.Block)
-    parent_block = optimizer.block.block_by_index[index]
-    return BOI.add_edge!(parent_block, node, block, EdgeModel(optimizer))
-end
+# function BOI.add_edge!(optimizer::SchurOptimizer, index::BOI.BlockIndex, nodes::NTuple{N, BOI.Node} where N)
+#     block = optimizer.block.block_by_index[index]
+#     return BOI.add_edge!(block, nodes, EdgeModel(optimizer))
+# end
+
+# function BOI.add_edge!(optimizer::SchurOptimizer, index::BOI.BlockIndex, blocks::NTuple{N, BOI.Block} where N)
+#     block = optimizer.block.block_by_index[index]
+#     return BOI.add_edge!(block, blocks, EdgeModel(optimizer))
+# end
+
+# function BOI.add_edge!(optimizer::SchurOptimizer, index::BOI.BlockIndex, node::BOI.Node, block::BOI.Block)
+#     parent_block = optimizer.block.block_by_index[index]
+#     return BOI.add_edge!(parent_block, node, block, EdgeModel(optimizer))
+# end
 
 # TODO: figure out whether we can do these
 # MOI.supports_incremental_interface(::SchurOptimizer) = false
