@@ -1,15 +1,129 @@
 struct EdgeData
-    ninds::UnitRange{Int}
-    minds::UnitRange{Int}
+    column_indices::Union{UnitRange{Int64},Vector{Int64}}
+    row_indices::Union{UnitRange{Int64},Vector{Int64}}
     nnzs_jac_inds::UnitRange{Int}
     nnzs_hess_inds::UnitRange{Int}
 end
 
+struct BlockData
+    num_variables::Int64
+    num_constraints::Int64
+    nnz_jac::Int64
+    nnz_hess::Int64
+    edge_data::OrderedDict{Edge,EdgeData}
+    sub_block_data::OrderedDict{BlockIndex,BlockData}
+    function BlockData()
+        block_data = new(
+            0,
+            0,
+            0,
+            0,
+            OrderedDict{Edge,EdgeData}(),
+            OrderedDict{BlockIndex,BlockData}()
+        )
+        return block_data
+    end
+
+    function BlockData(
+        num_variables::Int64,
+        num_constraints::Int64,
+        nnz_jac::Int64,
+        nnz_hess::Int64,
+        edge_data::OrderedDict{Edge,EdgeData},
+        sub_block_data::OrderedDict{BlockIndex,BlockData}
+    )
+        return new(
+            num_variables,
+            num_constraints,
+            nnz_jac,
+            nnz_hess,
+            edge_data,
+            sub_block_data
+        )
+    end
+end
+
+function build_block_data(block::Block, requested_features::Vector{Symbol})
+    # nodes / variables
+    count_columns = 0
+    node_columns = Dict{Int64,UnitRange}()
+    for node in block.nodes
+        num_vars = _num_variables(node)
+        node_columns[node.index] = count_columns + 1 : count_columns + num_vars
+        count_columns += num_vars
+    end
+
+    # edges / everything else
+    count_rows = 0
+    count_nnzh = 0
+    count_nnzj = 0
+    edge_data = OrderedDict{Edge,EdgeData}()
+    for edge in block.edges
+        nlp_data = MOI.get(edge, MOI.NLPBlock())
+        MOI.initialize(nlp_data.evaluator, requested_features)
+
+        # map variables to evaluator columns
+        # we treat an edge with one node as a special case and just unit ranges
+        if edge isa Edge{NTuple{1,Node}}
+            node = edge.elements[1]
+            columns = node_columns[node.index]
+        else
+            nvs = node_variable_indices(block, edge) # Vector{NodeVariableIndex}
+            columns = Int64[]
+            for nvi in nvs
+                node = nvi.node
+                push!(columns, node_columns[node.index][_column(nvi)])
+            end
+        end
+
+        # edge rows
+        n_con_edge = _num_constraints(edge)
+        rows = count_rows+1 : count_rows+n_con_edge
+        count_rows += n_con_edge
+
+        # edge hessian indices
+        if :Hess in requested_features
+            hessian_sparsity = MOI.hessian_lagrangian_structure(edge)
+            nnzs_hess_inds = count_nnzh+1 : count_nnzh + length(hessian_sparsity)
+            count_nnzh += length(hessian_sparsity)
+        end
+
+        # edge jacobian indices
+        if :Jac in requested_features
+            jacobian_sparsity = MOI.jacobian_structure(edge)
+            nnzs_jac_inds = count_nnzj+1 : count_nnzj + length(jacobian_sparsity)
+            count_nnzj += length(jacobian_sparsity)
+        end
+
+        edge_data[edge] = EdgeData(columns, rows, nnzs_jac_inds, nnzs_hess_inds)
+    end
+
+    sub_block_data = OrderedDict{BlockIndex,BlockData}()
+    Threads.@threads for sub_block in block.sub_blocks
+        sub_block_data[sub_block.index] = build_block_data(sub_block)
+    end
+
+    # update parent block rows, columns, etc...
+    if length(sub_block_data) > 0
+        count_columns += sum(sb.num_variables for sb in values(sub_block_data))
+        count_rows += sum(sb.num_constraints for sb in values(sub_block_data))
+        count_nnzj += sum(sb.nnz_hess for sb in values(sub_block_data))
+        count_nnzh += sum(sb.nnz_jac for sb in values(sub_block_data))
+    end
+
+    return BlockData(
+        count_columns,
+        count_rows,
+        count_nnzj,
+        count_nnzh,
+        edge_data,
+        sub_block_data
+    )
+end
+
 """
     BlockEvaluator(
-        model::Model,
-        backend::AbstractAutomaticDifferentiation,
-        ordered_variables::Vector{MOI.VariableIndex},
+        block::Block
     )
 Create `Evaluator`, a subtype of `MOI.AbstractNLPEvaluator`, from `Model`.
 """
@@ -20,13 +134,8 @@ mutable struct BlockEvaluator{B} <: MOI.AbstractNLPEvaluator
     # The abstract-differentiation backend
     backend::B
 
-    # edge data for evaluations
-    edge_data::OrderedDict{Edge,EdgeData}
-    num_variables::Int64
-    num_constraints::Int64
-    nnz_hess::Int64
-    nnz_jac::Int64
-
+    block_data::BlockData
+    
     eval_objective_timer::Float64
     eval_constraint_timer::Float64
     eval_objective_gradient_timer::Float64
@@ -38,51 +147,16 @@ mutable struct BlockEvaluator{B} <: MOI.AbstractNLPEvaluator
         backend::B=MOI.Nonlinear.SparseReverseMode()
     ) where {B<:MOI.Nonlinear.AbstractAutomaticDifferentiation}
 
-        edge_data = Dict{Edge,EdgeData}()
-
-        num_vars = num_variables(block)
-        num_constraints = num_constraints(block)
-
-        count_constraints = 0
+        count_columns = 0
+        count_rows = 0
         count_nnzh = 0
         count_nnzj = 0
-        for edge in all_edges(block)
-
-            nlp_data = MOI.get(edge, MOI.NLPBlock())
-            MOI.initialize(nlp_data.evaluator, [:Grad,:Hess,:Jac])
-            
-            # edge columns
-            # columns = column_inds(edge)
-            # ninds = range(columns[1],columns[end])
-
-            # edge rows
-            n_con_edge = num_constraints(edge)
-            minds = count_constraints+1 : count_constraints+n_con_edge
-            count_constraints += n_con_edge
-
-            # edge hessian indices
-            hessian_sparsity = MOI.hessian_lagrangian_structure(edge)
-            nnzs_hess_inds = count_nnzh+1 : count_nnzh + length(hessian_sparsity)
-            count_nnzh += length(hessian_sparsity)
-
-            # edge jacobian indices
-            jacobian_sparsity = MOI.jacobian_structure(edge)
-            nnzs_jac_inds = count_nnzj+1 : count_nnzj + length(jacobian_sparsity)
-            count_nnzj += length(jacobian_sparsity)
-
-            edge_data[edge] = EdgeData(ninds, minds, nnzs_jac_inds, nnzs_hess_inds)
-        end
-
-        num_variables = MOI.get(block, MOI.NumberOfVariables())
+        block_data = BlockData()
 
         return new{B}(
             block,
             backend,
-            edge_data,
-            num_variables,
-            count_constraints,
-            count_nnzh,
-            count_nnzj,
+            block_data,
             0.0,
             0.0,
             0.0,
@@ -92,33 +166,64 @@ mutable struct BlockEvaluator{B} <: MOI.AbstractNLPEvaluator
     end
 end
 
+function Base.string(evaluator::BlockEvaluator)
+    return """Block NLP Evaluator
+    """
+end
+Base.print(io::IO, evaluator::BlockEvaluator) = print(io, string(evaluator))
+Base.show(io::IO, evaluator::BlockEvaluator) = print(io, evaluator)
+
 function MOI.initialize(evaluator::BlockEvaluator, requested_features::Vector{Symbol})
-    for edge in all_edges(evaluator.block)
-        MOI.initialize(edge, requested_features)
-    end
+    evaluator.block_data = build_block_data(evaluator.block, requested_features)
+    return
 end
 
 ### Eval_F_CB
 
 function MOI.eval_objective(evaluator::BlockEvaluator, x)
-	obj = Threads.Atomic{Float64}(0.)
-	for edge in all_edges(evaluator.block)
-        ninds = evaluator.edge_data[edge].ninds
-        Threads.atomic_add!(obj, MOI.eval_objective(edge, view(x, ninds)))
-    end
-    return obj.value
+    return eval_objective(evaluator.block, evaluator.block_data, x)
 end
+
+function eval_objective(block::Block, block_data::BlockData, x)
+    # initialize 
+    obj = Threads.Atomic{Float64}(0.)
+
+    # evaluate root edges
+    Threads.@threads for i = 1:length(block.edges)
+        edge = block.edges[i]
+        edge_data = block_data.edge_data[edge]
+        columns = edge_data.column_indices
+        Threads.atomic_add!(obj, MOI.eval_objective(edge, view(x, columns)))
+    end
+
+    # evaluate sub blocks
+    Threads.@threads for i = 1:length(block.sub_blocks)
+        sub_block = block.sub_blocks[i]
+        sub_block_data = block_data.sub_block_data[sub_block.index]
+        columns = sub_block_data.column_indices
+        Threads.atomic_add!(
+            obj,
+            MOI.eval_objective(sub_block, sub_block_data, view(x, columns))
+        )
+    end
+    return obj
+end
+
+# obj_vec = zeros(length(block_data.edge_data))
+# obj = sum(obj_vec)
+# obj = Threads.Atomic{Float64}(0.)
+# Threads.atomic_add!(obj, MOI.eval_objective(edge, view(x, columns)))
 
 ### Eval_Grad_F_CB
 
 function MOI.eval_objective_gradient(evaluator::BlockEvaluator, f, x)
     # evaluate gradient for each edge and sum
     f_locals = [spzeros(length(f)) for _ = 1:length(evaluator.block.edges)]
-    edges = all_edges(evaluator.block)
+    edges = block.edges
     Threads.@threads for i = 1:length(edges)
         edge = edges[i]
-        ninds = evaluator.edge_data[edge].ninds
-        MOI.eval_objective_gradient(edge, view(f_locals[i],ninds), view(x,ninds))
+        columns = evaluator.edge_data[edge].column_indices
+        MOI.eval_objective_gradient(edge, view(f_locals[i],columns), view(x,columns))
     end
     f[:] = sum(f_locals)
     return nothing
@@ -128,8 +233,8 @@ end
 
 function MOI.eval_constraint(evaluator::BlockEvaluator, c, x)
 	Threads.@threads for edge in all_edges(evaluator.block)
-		ninds = evaluator.edge_data[edge].ninds
-		minds = evaluator.edge_data[edge].minds
+		ninds = evaluator.edge_data[edge].column_indices
+		minds = evaluator.edge_data[edge].row_indices
 		MOI.eval_constraint(edge, view(c, minds), view(x, ninds))
 	end
     return nothing
