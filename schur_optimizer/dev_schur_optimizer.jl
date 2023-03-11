@@ -183,27 +183,3 @@ MOI.eval_constraint_jacobian(edge3, jac_values3, x3_eval)
 hess_lag_structure3 = MOI.hessian_lagrangian_structure(edge3)
 hess_values3 = zeros(length(hess_lag_structure3))
 MOI.eval_hessian_lagrangian(edge3, hess_values3, x3_eval, 1.0, ones(2))
-
-block_evaluator = BOI.BlockEvaluator(optimizer.block)
-MOI.initialize(block_evaluator, [:Grad, :Jac, :Hess])
-
-# x_block = ones(6)
-
-# # objective
-# block_obj = MOI.eval_objective(block_evaluator, x_block)
-
-# # # constraints
-# c_block = zeros(6)
-# MOI.eval_constraint(block_evaluator, c_block, x_block)
-
-# # # gradient
-# grad_block = zeros(6)
-# MOI.eval_objective_gradient(block_evaluator, grad_block, x_block)
-
-# jac_structure_block = MOI.jacobian_structure(block_evaluator)
-# jac_values_block = zeros(length(jac_structure_block))
-# MOI.eval_constraint_jacobian(block_evaluator, jac_values_block, x_block)
-
-# hess_lag_structure3 = MOI.hessian_lagrangian_structure(edge3)
-# hess_values3 = zeros(length(hess_lag_structure3))
-# MOI.eval_hessian_lagrangian(edge3, hess_values3, x3_eval, 1.0, ones(2))
