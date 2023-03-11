@@ -14,6 +14,13 @@ struct BlockIndex
 	value::Int64
 end
 
+# TODO
+struct NodeIndex
+	value::Int64
+	block_index::BlockIndex
+end
+
+
 ### Node and Edge Definitions
 
 """
