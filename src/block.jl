@@ -44,6 +44,14 @@ function _column(nv::NodeVariableIndex)
 	return nv.index.value
 end
 
+function Base.string(nv::NodeVariableIndex)
+    return """
+    Node (Block $(nv.node.block_index.value), Node $(nv.node.index), Index $(nv.index.value))
+    """
+end
+Base.print(io::IO, nv::NodeVariableIndex) = print(io, string(nv))
+Base.show(io::IO, nv::NodeVariableIndex) = print(io, nv)
+
 """
 	Edge{T<:Tuple}
 
@@ -62,6 +70,14 @@ struct EdgeVariableIndex
 	edge::Edge
 	index::MOI.VariableIndex
 end
+
+function Base.string(ev::EdgeVariableIndex)
+    return """
+    Edge (Block $(ev.edge.block_index.value), Edge $(ev.edge.index), Index $(ev.index.value))
+    """
+end
+Base.print(io::IO, ev::EdgeVariableIndex) = print(io, string(ev))
+Base.show(io::IO, ev::EdgeVariableIndex) = print(io, ev)
 
 struct NodeEdgeMap
 	node_to_edge::OrderedDict{NodeVariableIndex,EdgeVariableIndex}
@@ -172,9 +188,9 @@ function add_edge!(
 	end
 	
 	# create and add edge
-	edge_idx = length(block.edges) + 1
+	edge_index = length(block.edges) + 1
 	model = edge_model(optimizer)
-	edge = Edge{NTuple{length(sub_blocks),Block}}(edge_index, block_index, nodes, model)
+	edge = Edge{NTuple{length(sub_blocks),Block}}(edge_index, block_index, sub_blocks, model)
 	_add_edge!(block, edge)
 	return edge
 end
@@ -193,7 +209,7 @@ function add_edge!(
 	sub_block in block.sub_blocks || error("Sub block must be within give block")
 
 	# create and add edge
-	edge_idx = length(block.edges) + 1
+	edge_index = length(block.edges) + 1
 	model = edge_model(optimizer)
 	edge = Edge{Tuple{Node, Block}}(edge_index, block_index, (node, sub_block), model)
 	_add_edge!(block, edge)
@@ -212,18 +228,23 @@ function _add_edge!(block::Block, edge::Edge{NTuple{1,Node}})
 end
 
 function add_sub_block!(optimizer::AbstractBlockOptimizer, block::Block)::Block
-	main_block = MOI.get(optimizer, Block())
-	block_index = BlockIndex(length(main_block.block_by_index) + 1)
+	# get the root block
+	root_block = MOI.get(optimizer, BlockStructure())
+
+	# define a new block index, create the sub-block
+	block_index = length(root_block.block_by_index)
 	sub_block = Block(block_index)
 	push!(block.sub_blocks, sub_block)
-	block.block_by_index[block_index] = sub_block
-	main_block.block_by_index[block_index] = sub_block
+
+	# track new block index
+	block.block_by_index[sub_block.index] = sub_block
+	root_block.block_by_index[sub_block.index] = sub_block
 	return sub_block
 end
 
 function add_sub_block!(optimizer::AbstractBlockOptimizer)::Block
-	main_block = MOI.get(optimizer, Block())
-	block = add_sub_block!(optimizer, main_block)
+	root_block = MOI.get(optimizer, BlockStructure())
+	block = add_sub_block!(optimizer, root_block)
 	return block
 end
 
@@ -348,7 +369,6 @@ function MOI.add_constraint(
 	local_ci = MOI.add_constraint(edge.model, func, set)
 	block_index = MOI.get(optimizer.block, MOI.NumberOfConstraints{F,S}())
 	block_ci = MOI.ConstraintIndex{F,S}(block_index)
-	#edge.constraint_map[local_ci] = block_ci
 	return block_ci
 end
 
