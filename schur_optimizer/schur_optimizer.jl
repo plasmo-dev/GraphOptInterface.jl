@@ -7,6 +7,7 @@ const MOI = MathOptInterface
 
 using BlockOptInterface
 const BOI = BlockOptInterface
+using NLPModels
 
 struct _EmptyNLPEvaluator <: MOI.AbstractNLPEvaluator end
 
@@ -512,101 +513,173 @@ function MOI.eval_hessian_lagrangian(edge::EdgeModel, H, x, σ, μ)
     return
 end
 
-# We might not need this anymore
-# struct BlockMOIModel{T} <: AbstractNLPModel{T,Vector{T}}
-#     ninds::Vector{UnitRange{Int}}
-#     minds::Vector{UnitRange{Int}}
-#     pinds::Vector{UnitRange{Int}}
-#     nnzs_jac_inds::Vector{UnitRange{Int}}
-#     nnzs_hess_inds::Vector{UnitRange{Int}}
-#     nnzs_link_jac_inds::Vector{UnitRange{Int}}
+### NLP Models Wrapper
 
-#     x_index_map::Dict
-#     g_index_map::Dict
+struct BlockNLPModel{T} <: AbstractNLPModel{T,Vector{T}}
+    meta::NLPModelMeta{T, Vector{T}}
+    optimizer::SchurOptimizer
+    counters::NLPModels.Counters
+end
 
-#     meta::NLPModelMeta{T, Vector{T}}
-#     counters::MadNLP.NLPModels.Counters
-#     ext::Dict{Symbol,Any}
-# end
-
-function MOIModel(model::SchurOptimizer)
-
-    # initialize NLP evaluators
-    for edge in all_edges(model)
-        :Hess in MOI.features_available(model.nlp_data.evaluator) || error("Hessian information is needed.")
-        MOI.initialize(edge.nlp_data.evaluator, [:Grad,:Hess,:Jac])
-    end
-
-    # Initial variable
-    nvar = length(model.variables.lower)
-    x0  = Vector{Float64}(undef,nvar)
-    for i in 1:length(model.variable_primal_start)
-        x0[i] = if model.variable_primal_start[i] !== nothing
-            model.variable_primal_start[i]
-        else
-            clamp(0.0, model.variables.lower[i], model.variables.upper[i])
+function _fill_variable_info!(block, block_data, x0, x_lower, x_upper)
+    # loop through each node
+    for node in block.nodes
+        ninds = block_data.node_data[node]
+        x0_node = Vector{Float64}(undef, BOI._num_variables(node))
+        for i = 1:BOI._num_variables(node)
+            if node.model.variable_primal_start[i] !== nothing
+                x0_node[i] = node.model.variable_primal_start[i]
+            else
+                x0_node[i] = clamp(0, node.model.variables.lower[i], node.model.variables.upper[i])
+            end
         end
+        x0[ninds] .= x0_node
+        x_lower[ninds] .= node.model.variables.lower
+        x_upper[ninds] .= node.model.variables.upper
     end
 
-    # Constraints bounds
-    g_L, g_U = copy(model.qp_data.g_L), copy(model.qp_data.g_U)
-    for bound in model.nlp_data.constraint_bounds
-        push!(g_L, bound.lower)
-        push!(g_U, bound.upper)
+    # recursively call sub-blocks
+    for sub_block in block.sub_blocks
+        sub_block_data = block_data.sub_block_data[sub_block.index]
+        _fill_variable_info!(sub_block, sub_block_data, x0, x_lower, x_upper)
     end
-    ncon = length(g_L)
+    return
+end
+
+_dual_start(::EdgeModel, ::Nothing, ::Int=1) = 0.0
+
+_dual_start(model::EdgeModel, value::Real, scale::Int=1) = value*scale
+
+function _fill_constraint_info!(block, block_data, y0, c_lower, c_upper)
+    # loop through each edge
+    for edge in block.edges
+        minds = block_data.edge_data[edge].row_indices
+        model = edge.model
+        g_L = copy(model.qp_data.g_L)
+        g_U = copy(model.qp_data.g_U)
+        for bound in model.nlp_data.constraint_bounds
+            push!(g_L, bound.lower)
+            push!(g_U, bound.upper)
+        end
+        c_lower[minds] .= g_L
+        c_upper[minds] .= g_U
+
+        # dual start
+        y0_edge = Vector{Float64}(undef, BOI._num_constraints(edge))
+        for (i, start) in enumerate(model.qp_data.mult_g)
+            y0_edge[i] = _dual_start(model, start, -1)
+        end
+        offset = length(model.qp_data.mult_g)
+        if model.nlp_dual_start === nothing
+            y0_edge[(offset+1):end] .= 0.0
+        else
+            for (i, start) in enumerate(model.nlp_dual_start::Vector{Float64})
+                y0_edge[offset+i] = _dual_start(model, start, -1)
+            end
+        end
+        y0[minds] .= y0_edge
+    end
+
+    # recursively call sub-blocks
+    for sub_block in block.sub_blocks
+        sub_block_data = block_data.sub_block_data[sub_block.index]
+        _fill_constraint_info!(sub_block, sub_block_data, y0, c_lower, c_upper)
+    end
+    return
+end
+
+obj(nlp::BlockNLPModel,x::Vector{Float64}) = MOI.eval_objective(nlp.model,x)
+
+function grad!(nlp::BlockNLPModel,x::Vector{Float64},f::Vector{Float64})
+    MOI.eval_objective_gradient(nlp.model,f,x)
+end
+
+function cons!(nlp::BlockNLPModel,x::Vector{Float64},c::Vector{Float64})
+    MOI.eval_constraint(nlp.model,c,x)
+end
+
+function jac_coord!(nlp::BlockNLPModel,x::Vector{Float64},jac::Vector{Float64})
+    MOI.eval_constraint_jacobian(nlp.model,jac,x)
+end
+
+function hess_coord!(nlp::BlockNLPModel,x::Vector{Float64},l::Vector{Float64},hess::Vector{Float64}; obj_weight::Float64=1.)
+    MOI.eval_hessian_lagrangian(nlp.model,hess,x,obj_weight,l)
+end
+
+function hess_structure!(nlp::BlockNLPModel, I::AbstractVector{T}, J::AbstractVector{T}) where T
+    cnt = 1
+    for (row, col) in  MOI.hessian_lagrangian_structure(nlp.model)
+        I[cnt], J[cnt] = row, col
+        cnt += 1
+    end
+end
+
+function jac_structure!(nlp::BlockNLPModel, I::AbstractVector{T}, J::AbstractVector{T}) where T
+    cnt = 1
+    for (row, col) in  MOI.jacobian_structure(nlp.model)
+        I[cnt], J[cnt] = row, col
+        cnt += 1
+    end
+end
+
+function BlockNLPModel(model::SchurOptimizer)
+
+    # initialize
+    block_evaluator = BOI.BlockEvaluator(model.block)
+    MOI.initialize(block_evaluator, [:Grad, :Hess, :Jac])
+    block = model.block
+    block_data = block_evaluator.block_data
+
+    # primals, lower, upper bounds
+    nvar = block_data.num_variables
+    x0 = Vector{Float64}(undef,nvar) # primal start
+    x_lower = Vector{Float64}(undef,nvar)
+    x_upper = Vector{Float64}(undef,nvar)
+    _fill_variable_info!(block, block_data, x0, x_lower, x_upper)
+
+    # duals, constraints lower & upper bounds
+    ncon = block_data.num_constraints
+    y0 = Vector{Float64}(undef, ncon) # dual start
+    c_lower = Vector{Float64}(undef, ncon)
+    c_upper = Vector{Float64}(undef, ncon)
+    _fill_constraint_info!(block, block_data, y0, c_lower, c_upper)
 
     # Sparsity
-    jacobian_sparsity = MOI.jacobian_structure(model)
-    hessian_sparsity = MOI.hessian_lagrangian_structure(model)
-    nnzh = length(hessian_sparsity)
-    nnzj = length(jacobian_sparsity)
+    nnzh = block_data.nnz_hess
+    nnzj = block_data.nnz_jac
 
-    # Dual multipliers
-    y0 = Vector{Float64}(undef,ncon)
-    for (i, start) in enumerate(model.qp_data.mult_g)
-        y0[i] = _dual_start(model, start, -1)
-    end
-    offset = length(model.qp_data.mult_g)
-    if model.nlp_dual_start === nothing
-        y0[(offset+1):end] .= 0.0
-    else
-        for (i, start) in enumerate(model.nlp_dual_start::Vector{Float64})
-            y0[offset+i] = _dual_start(model, start, -1)
-        end
-    end
-
-
-    # TODO
     model.options[:jacobian_constant], model.options[:hessian_constant] = false, false
     model.options[:dual_initialized] = !iszero(y0)
 
-    return MOIModel(
+    return BlockNLPModel(
         NLPModelMeta(
             nvar,
             x0 = x0,
-            lvar = model.variables.lower,
-            uvar = model.variables.upper,
+            lvar = x_lower,
+            uvar = x_upper,
             ncon = ncon,
             y0 = y0,
-            lcon = g_L,
-            ucon = g_U,
+            lcon = c_lower,
+            ucon = c_upper,
             nnzj = nnzj,
             nnzh = nnzh,
             minimize = model.sense == MOI.MIN_SENSE
         ),
-        model,NLPModels.Counters())
+        model,
+        NLPModels.Counters())
 end
 
 # # Optimize!
 # function MOI.optimize!(model::SchurOptimizer)
-#     model.nlp = MOIModel(model)
+#     model.nlp = BlockMOIModel(model)
 #     if model.silent
 #         model.options[:print_level] = MadNLP.ERROR
 #     end
 
+#     # get block partitions from block structure
 #     partitions = get_block_partitions(model)
 
+#     # pass schur options
 #     schur_options = SchurLinearOptions()
 
 #     model.solver = MadNLP.MadNLPSolver(
