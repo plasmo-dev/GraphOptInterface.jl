@@ -1,25 +1,29 @@
 const INPUT_MATRIX_TYPE = :csc
 
-@kwdef mutable struct SchurOptions{T1<:AbstractLinearSolver,T2<:AbstractLinearSolver} <: AbstractOptions
-    subproblem_solver::Type{T1}=default_linear_solver()
-    subproblem_solver_options::AbstractOptions
-    dense_solver::Type{T2}=default_dense_solver()
-    dense_solver_options::AbstractOptions
+import MadNLP: AbstractOptions, AbstractLinearSolver, MadNLPLogger, SubVector, 
+default_linear_solver, default_dense_solver, default_options
+
+Base.@kwdef mutable struct SchurOptions <: AbstractOptions
+    partition::Vector{Int}=Vector{Int}()
+    subproblem_solver::Type{default_linear_solver()}=default_linear_solver()
+    subproblem_solver_options::AbstractOptions=default_options(default_linear_solver())
+    dense_solver::Type{default_dense_solver()}=default_dense_solver()
+    dense_solver_options::AbstractOptions=default_options(default_dense_solver())
 end
 
-mutable struct SolverWorker
+mutable struct SolverWorker{T,ST<:AbstractLinearSolver}
     V::Vector{Int}
     V_0_nz::Vector{Int}
-    csc::SparseMatrixCSC{Float64,Int32}
-    csc_view::SubVector{Float64}
-    compl::SparseMatrixCSC{Float64,Int32}
-    compl_view::SubVector{Float64}
-    M::AbstractLinearSolver
-    w::Vector{Float64}
+    csc::SparseMatrixCSC{T,Int32}
+    csc_view::SubVector{T}
+    compl::SparseMatrixCSC{T,Int32}
+    compl_view::SubVector{T}
+    M::ST
+    w::Vector{T}
 end
 
 mutable struct SchurLinearSolver{T} <: AbstractLinearSolver{T}
-    csc::SparseMatrixCSC{Float64,Int32}
+    csc::SparseMatrixCSC{T,Int32}
     inds::Vector{Int}
     partitions::Vector{Int}
     num_partitions::Int
@@ -29,8 +33,8 @@ mutable struct SchurLinearSolver{T} <: AbstractLinearSolver{T}
     fact # dense solver
 
     V_0::Vector{Int}
-    csc_0::SparseMatrixCSC{Float64,Int32}
-    csc_0_view::SubVector{Float64}
+    csc_0::SparseMatrixCSC{T,Int32}
+    csc_0_view::SubVector{T}
     w_0::Vector{Float64}
 
     sws::Vector{SolverWorker}
@@ -40,12 +44,8 @@ mutable struct SchurLinearSolver{T} <: AbstractLinearSolver{T}
 end
 
 function SchurLinearSolver(
-	csc::SparseMatrixCSC{T},
-    partition::Vector{Int};
-	opt=SchurOptions(
-		schur_subproblem_solver=default_linear_solver(),
-	    schur_dense_solver=default_dense_solver()
-	),
+	csc::SparseMatrixCSC{T};
+    opt=SchurOptions(),
 	logger=MadNLPLogger()
 ) where T
 
@@ -70,10 +70,10 @@ function SchurLinearSolver(
     w_0 = Vector{Float64}(undef, length(V_0))
 
     # solver-workers
-    sws = Vector{SolverWorker}(undef, num_partitions)
+    sws = Vector{SolverWorker{opt.schur_subproblem_solver}}(undef, num_partitions)
 
-    @blas_safe_threads for k=1:num_partitions
-        sws[k] = SolverWorker(
+    Threads.@threads for k=1:num_partitions
+        sws[k] = SolverWorker{opt.schur_subproblem_solver}(
             partition, 
             V_0, 
             csc,
@@ -116,8 +116,8 @@ function SolverWorker(
     k::Int,
     subproblem_solver::Type{ST},
     options::AbstractOptions,
-    logger::MadNLPLogger,
-) where ST <: AbstractLinearSolver
+    logger::MadNLPLogger
+) where T where ST <: AbstractLinearSolver
 
     # partition indices
     V = findall(partition.==k)
@@ -131,7 +131,7 @@ function SolverWorker(
     solver = subproblem_solver{T}(csc_k; opt=options, logger=logger)
     
     # sub-problem step
-    w = Vector{Float64}(undef,csc_k.n)
+    w = Vector{T}(undef,csc_k.n)
 
     return SolverWorker(V, V_0_nz, csc_k, csc_k_view, compl, compl_view, solver, w)
 end
@@ -148,7 +148,7 @@ function factorize!(M::SchurLinearSolver)
     M.schur .= 0.
     M.csc_0.nzval .= M.csc_0_view
     M.schur .= M.csc_0
-    @blas_safe_threads for sw in M.sws
+    Threads.@threads for sw in M.sws
         sw.csc.nzval .= sw.csc_view
         sw.compl.nzval .= sw.compl_view
         factorize!(sw.M)
@@ -156,7 +156,7 @@ function factorize!(M::SchurLinearSolver)
 
     # NOTE: asynchronous multithreading doesn't work here
     for q = 1:length(M.colors)
-        @blas_safe_threads for k = 1:length(M.sws)
+        Threads.@threads for k = 1:length(M.sws)
             for j = M.colors[mod(q+k-1, length(M.sws))+1] # each subproblem works on a different color
                 factorize_worker!(j, M.sws[k], M.schur)
             end
@@ -174,9 +174,9 @@ function factorize_worker!(j,sw,schur)
 end
 
 
-function solve!(M::Solver, x::AbstractVector{Float64})
+function solve!(M::SchurLinearSolver, x::AbstractVector{T}) where T
     M.w_0 .= view(x, M.V_0)
-    @blas_safe_threads for sw in M.sws
+    Threads.@threads for sw in M.sws
         sw.w.=view(x, sw.V)
         solve!(sw.M, sw.w)
     end
@@ -185,7 +185,7 @@ function solve!(M::Solver, x::AbstractVector{Float64})
     end
     solve!(M.fact, M.w_0)
     view(x, M.V_0) .= M.w_0
-    @blas_safe_threads for sw in M.sws
+    Threads.@threads for sw in M.sws
         x_view = view(x,sw.V)
         sw.w.= x_view
         mul!(sw.w,sw.compl,M.w_0,1.,1.)
@@ -216,9 +216,8 @@ function improve!(M::SchurLinearSolver)
 end
 
 function introduce(M::SchurLinearSolver)
-    for sw in M.sws
-        sw.M isa EmptyLinearSolver || return "schur equipped with "*introduce(sw.M)
-    end
+    sw = M.sws[1]
+    return "schur equipped with "*introduce(sw.M)
 end
 
-end # module
+# end # module
