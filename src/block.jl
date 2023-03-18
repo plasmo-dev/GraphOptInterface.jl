@@ -15,10 +15,10 @@ struct BlockIndex
 end
 
 # TODO
-struct NodeIndex
-	value::Int64
-	block_index::BlockIndex
-end
+# struct NodeIndex
+# 	value::Int64
+# 	block_index::BlockIndex
+# end
 
 
 ### Node and Edge Definitions

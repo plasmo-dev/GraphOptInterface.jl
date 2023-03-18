@@ -1,5 +1,6 @@
 # struct NodeData
 #     node_columns::UnitRange
+#     node_block_index::Int
 # end
 
 struct EdgeData
@@ -14,7 +15,10 @@ mutable struct BlockData
     num_constraints::Int64
     nnz_jac::Int64
     nnz_hess::Int64
+    all_columns::UnitRange{Int64}
+    all_rows::UnitRange{Int64}
 
+    # node and edge row and column indice
     node_data::OrderedDict{Node,UnitRange{Int64}}
     edge_data::OrderedDict{Edge,EdgeData}
     sub_block_data::OrderedDict{BlockIndex,BlockData}
@@ -24,6 +28,8 @@ mutable struct BlockData
             0,
             0,
             0,
+            UnitRange{Int64}(0,0),
+            UnitRange{Int64}(0,0),
             OrderedDict{Node,UnitRange{Int64}}(),
             OrderedDict{Edge,EdgeData}(),
             OrderedDict{BlockIndex,BlockData}()
@@ -36,6 +42,8 @@ mutable struct BlockData
         num_constraints::Int64,
         nnz_jac::Int64,
         nnz_hess::Int64,
+        all_columns::UnitRange{Int64},
+        all_rows::UnitRange{Int64},
         node_data::OrderedDict{Node,UnitRange{Int64}},
         edge_data::OrderedDict{Edge,EdgeData},
         sub_block_data::OrderedDict{BlockIndex,BlockData}
@@ -45,6 +53,8 @@ mutable struct BlockData
             num_constraints,
             nnz_jac,
             nnz_hess,
+            all_columns,
+            all_rows,
             node_data,
             edge_data,
             sub_block_data
@@ -68,6 +78,7 @@ function _build_node_data!(
 )
     # count up variables
     count_columns = 0
+    offset_start = offset_columns
 
     # TODO: NodeIndex
     # node_columns = Dict{NodeIndex,UnitRange}()
@@ -80,7 +91,8 @@ function _build_node_data!(
     end
     block_data.num_variables = count_columns
     block_data.node_data = node_columns
-
+    
+    # build sub-blocks
     offset_columns = offset_columns+count_columns
     for sub_block in block.sub_blocks
         sub_block_data = block_data.sub_block_data[sub_block.index]
@@ -92,6 +104,9 @@ function _build_node_data!(
         # update root block for each sub-block
         block_data.num_variables += sub_block_data.num_variables
     end
+
+    block_data.all_columns = offset_start+1:offset_start+block_data.num_variables
+
     return
 end
 
@@ -107,6 +122,7 @@ function _build_edge_data!(
     count_nnzj = 0
     count_nnzh = 0
     edge_data = OrderedDict{Edge,EdgeData}()
+    offset_start = offset_rows
     
     # each edge contains constraints, jacobian, and hessian data
     for edge in block.edges
@@ -160,6 +176,11 @@ function _build_edge_data!(
 
         edge_data[edge] = EdgeData(columns, rows, nnzs_jac_inds, nnzs_hess_inds)
     end
+    
+    # row_start = edge_data[block.edges[1]].row_indices[1]
+    # row_end = edge_data[block.edges[end]].row_indices[end]
+    # block_data.rows = row_start:row_end
+
     block_data.edge_data = edge_data
     block_data.num_constraints = count_rows
     block_data.nnz_jac = count_nnzj
@@ -189,6 +210,9 @@ function _build_edge_data!(
         block_data.nnz_jac += sub_block_data.nnz_jac
         block_data.nnz_hess += sub_block_data.nnz_hess
     end
+
+    block_data.all_rows = offset_start+1:offset_start+block_data.num_constraints
+
     return   
 end
 
@@ -204,6 +228,9 @@ function build_block_data(
     _build_node_data!(block, block_data)
 
     _build_edge_data!(block, block_data, requested_features)
+
+    block_data.all_columns = 1:block_data.num_variables
+    block_data.all_rows = 1:block_data.num_constraints
 
     return block_data
 end
@@ -255,6 +282,8 @@ function Base.string(evaluator::BlockEvaluator)
 end
 Base.print(io::IO, evaluator::BlockEvaluator) = print(io, string(evaluator))
 Base.show(io::IO, evaluator::BlockEvaluator) = print(io, evaluator)
+
+
 
 function MOI.initialize(evaluator::BlockEvaluator, requested_features::Vector{Symbol})
     evaluator.block_data = build_block_data(evaluator.block, requested_features)

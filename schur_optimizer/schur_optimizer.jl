@@ -538,15 +538,15 @@ end
 obj(nlp::BlockNLPModel,x::Vector{Float64}) = BOI.eval_objective(nlp.evaluator, x)
 
 function grad!(nlp::BlockNLPModel, x::Vector{Float64}, f::Vector{Float64})
-    BOI.eval_objective_gradient(nlp.evaluator, f, x)
+    MOI.eval_objective_gradient(nlp.evaluator, f, x)
 end
 
 function cons!(nlp::BlockNLPModel, x::Vector{Float64}, c::Vector{Float64})
-    BOI.eval_constraint(nlp.evaluator, c, x)
+    MOI.eval_constraint(nlp.evaluator, c, x)
 end
 
 function jac_coord!(nlp::BlockNLPModel, x::Vector{Float64}, jac::Vector{Float64})
-    BOI.eval_constraint_jacobian(nlp.evaluator, jac, x)
+    MOI.eval_constraint_jacobian(nlp.evaluator, jac, x)
 end
 
 function hess_coord!(
@@ -556,12 +556,12 @@ function hess_coord!(
     hess::Vector{Float64};
     obj_weight::Float64=1.
 )
-    BOI.eval_hessian_lagrangian(nlp.evaluator, hess, x, obj_weight, l)
+    MOI.eval_hessian_lagrangian(nlp.evaluator, hess, x, obj_weight, l)
 end
 
 function hess_structure!(nlp::BlockNLPModel, I::AbstractVector{T}, J::AbstractVector{T}) where T
     cnt = 1
-    for (row, col) in  BOI.hessian_lagrangian_structure(nlp.evaluator)
+    for (row, col) in MOI.hessian_lagrangian_structure(nlp.evaluator)
         I[cnt], J[cnt] = row, col
         cnt += 1
     end
@@ -569,12 +569,13 @@ end
 
 function jac_structure!(nlp::BlockNLPModel, I::AbstractVector{T}, J::AbstractVector{T}) where T
     cnt = 1
-    for (row, col) in  BOI.jacobian_structure(nlp.evaluator)
+    for (row, col) in  MOI.jacobian_structure(nlp.evaluator)
         I[cnt], J[cnt] = row, col
         cnt += 1
     end
 end
 
+# populate variable info for NLPModels wrapper
 function _fill_variable_info!(block, block_data, x0, x_lower, x_upper)
     # loop through each node
     for node in block.nodes
@@ -604,6 +605,7 @@ _dual_start(::EdgeModel, ::Nothing, ::Int=1) = 0.0
 
 _dual_start(model::EdgeModel, value::Real, scale::Int=1) = value*scale
 
+# populate constraint info for NLPModels wrapper
 function _fill_constraint_info!(block, block_data, y0, c_lower, c_upper)
     # loop through each edge
     for edge in block.edges
@@ -652,11 +654,12 @@ function MOI.optimize!(optimizer::SchurOptimizer)
     partition = get_partition_vector(optimizer)
 
     # pass schur options
-    schur_options = SchurLinearOptions(partition)
+    # schur_options = SchurOptions()
 
     optimizer.solver = MadNLP.MadNLPSolver(
         optimizer.nlp;
-        linear_solver=SchurLinearSolver
+        linear_solver=SchurLinearSolver,
+        partition=partition
     )
     optimizer.result = solve!(optimizer.solver)
     optimizer.solve_time = optimizer.solver.cnt.total_time
@@ -664,7 +667,7 @@ function MOI.optimize!(optimizer::SchurOptimizer)
     return
 end
 
-# Schur optimizer needs a two-stage partition
+# SchurOptimizer supports up to two-level partition
 function get_partition_vector(nlp::BlockNLPModel)
     # TODO: explain inequality constraint elements in partition vector
     if isempty(block.sub_blocks)
@@ -724,23 +727,29 @@ function _get_two_level_partition(nlp::BlockNLPModel)
     rows = Vector{Int}(undef, num_con)
 
     for node in block.nodes
-        node_columns = block_data[node]
+        node_columns = block_data.node_data[node]
         columns[node_columns] .= 0
     end
 
-    for edge in BOI.self_edges(block)
+    # for edge in BOI.self_edges(block)
+    for edge in block.edges
         edge_rows = block_data.edge_data[edge].row_indices
         rows[edge_rows] .= 0
     end
 
+    # block-connecting edges also are 0
+    # node-block edges are 0?
+
     # we only support one level of hierarchy, so we assume sub-blocks are nodes
     for sub_block in block.sub_blocks
         sb_data = block_data.sub_block_data[sub_block.index]
-        block_node_columns = #
-        block_edge_columns = #
-
-        columns[block_node_columns] .= sub_block.index
+        block_node_columns = sb_data.all_columns
+        block_edge_columns = sb_data.all_rows
+        columns[block_node_columns] .= sub_block.index.value
+        rows[block_edge_columns] .= sub_block.index.value
     end
 
-
+    ineq_rows = rows[ind_ineq] 
+    partition = [columns; ineq_rows; rows]
+    return partition
 end
