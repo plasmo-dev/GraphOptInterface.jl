@@ -1,19 +1,10 @@
-import ..MadNLPGraph:
-    @kwdef, Logger, @debug, @warn, @error,
-    AbstractOptions, AbstractLinearSolver, EmptyLinearSolver, set_options!, SparseMatrixCSC, SubVector, 
-    SymbolicException,FactorizationException,SolveException,InertiaException,
-    introduce, factorize!, solve!, improve!, is_inertia, inertia,
-    default_linear_solver, default_dense_solver, get_csc_view, get_cscsy_view, nnz, mul!,
-    TwoStagePartition, set_blas_num_threads, blas_num_threads, @blas_safe_threads
-
 const INPUT_MATRIX_TYPE = :csc
 
-
-@kwdef mutable struct SchurLinearOptions <: AbstractOptions
-    schur_part::Vector{Int}
-    schur_num_parts::Int
-    schur_subproblem_solver::AbstractLinearSolver
-    schur_dense_solver::AbstractLinearSolver
+@kwdef mutable struct SchurOptions{T1<:AbstractLinearSolver,T2<:AbstractLinearSolver} <: AbstractOptions
+    subproblem_solver::Type{T1}=default_linear_solver()
+    subproblem_solver_options::AbstractOptions
+    dense_solver::Type{T2}=default_dense_solver()
+    dense_solver_options::AbstractOptions
 end
 
 mutable struct SolverWorker
@@ -27,14 +18,15 @@ mutable struct SolverWorker
     w::Vector{Float64}
 end
 
-mutable struct SchurLinearSolver <: AbstractLinearSolver
+mutable struct SchurLinearSolver{T} <: AbstractLinearSolver{T}
     csc::SparseMatrixCSC{Float64,Int32}
     inds::Vector{Int}
-    tsp::TwoStagePartition
+    partitions::Vector{Int}
+    num_partitions::Int
 
     schur::Matrix{Float64}
     colors
-    fact
+    fact # dense solver
 
     V_0::Vector{Int}
     csc_0::SparseMatrixCSC{Float64,Int32}
@@ -43,67 +35,105 @@ mutable struct SchurLinearSolver <: AbstractLinearSolver
 
     sws::Vector{SolverWorker}
 
-    opt::Options
-    logger::Logger
+    opt::SchurOptions
+    logger::MadNLPLogger
 end
 
-
 function SchurLinearSolver(
-	csc::SparseMatrixCSC{Float64};
-	opt=Options(
+	csc::SparseMatrixCSC{T},
+    partition::Vector{Int};
+	opt=SchurOptions(
 		schur_subproblem_solver=default_linear_solver(),
 	    schur_dense_solver=default_dense_solver()
 	),
-	logger=Logger(),
-	kwargs...
-)
+	logger=MadNLPLogger()
+) where T
 
-    set_options!(opt,option_dict,kwargs...)
     if string(opt.schur_subproblem_solver) == "MadNLP.Mumps"
         @warn(logger,"When Mumps is used as a subproblem solver, Schur is run in serial.")
         @warn(logger,"To use parallelized Schur, use Ma27 or Ma57.")
     end
 
+    # non-zeros in KKT
     inds = collect(1:nnz(csc))
-    partition = opt.schur_part
-    # tsp = TwoStagePartition(csc, opt.schur_part, opt.schur_num_parts)
+    num_partitions = unique(partition)
 
+    # first stage indices
     V_0   = findall(partition.==0)
-    colors = get_colors(length(V_0),opt.schur_num_parts)
+    colors = get_colors(length(V_0), num_partitions)
 
-    csc_0,csc_0_view = get_cscsy_view(csc,V_0,inds=inds)
-    schur = Matrix{Float64}(undef,length(V_0),length(V_0))
+    # KKT first-stage
+    csc_0, csc_0_view = get_cscsy_view(csc, V_0, inds=inds)
+    schur_matrix = Matrix{T}(undef, length(V_0), length(V_0))
 
-    w_0 = Vector{Float64}(undef,length(V_0))
+    # first-stage primal-dual step
+    w_0 = Vector{Float64}(undef, length(V_0))
 
-    sws = Vector{Any}(undef,opt.schur_num_parts)
+    # solver-workers
+    sws = Vector{SolverWorker}(undef, num_partitions)
 
-    copied_option_dict = copy(option_dict)
-    @blas_safe_threads for k=1:opt.schur_num_parts
+    @blas_safe_threads for k=1:num_partitions
         sws[k] = SolverWorker(
-            partition,V_0,csc,inds,k,opt.schur_subproblem_solver,logger,k==1 ? option_dict : copy(copied_option_dict))
+            partition, 
+            V_0, 
+            csc,
+            inds, 
+            k,
+            opt.subproblem_solver,
+            opt.subproblem_solver_options,
+            logger
+        )
     end
-    fact = opt.schur_dense_solver.Solver(schur)
-    return SchurLinearSolver(csc,inds,tsp,schur,colors,fact,V_0,csc_0,csc_0_view,w_0,sws,opt,logger)
+
+    # dense system solver
+    fact = opt.dense_solver{T}(schur_matrix; opt=opt.dense_solver_options)
+
+    return SchurLinearSolver{T}(
+        csc, 
+        inds,
+        partitions,
+        num_partitions,
+        schur_matrix,
+        colors,
+        fact,
+        V_0,
+        csc_0,
+        csc_0_view,
+        w_0,
+        sws,
+        opt,
+        logger
+    )
 end
 
-get_colors(n0,K) = [findall((x)->mod(x-1,K)+1==k,1:n0) for k=1:K]
+get_colors(n0, K) = [findall((x)->mod(x-1,K)+1==k,1:n0) for k=1:K]
 
-function SolverWorker(tsp,V_0,csc::SparseMatrixCSC{Float64},inds::Vector{Int},k,
-                      SubproblemSolverModule::Module,logger::Logger,option_dict::Dict{Symbol,Any})
+function SolverWorker(
+    partition::Vector{Int}, 
+    V_0::Vector{Int},
+    csc::SparseMatrixCSC{T},
+    inds::Vector{Int},
+    k::Int,
+    subproblem_solver::Type{ST},
+    options::AbstractOptions,
+    logger::MadNLPLogger,
+) where ST <: AbstractLinearSolver
 
-    V    = findall(tsp.part.==k)
+    # partition indices
+    V = findall(partition.==k)
 
-    csc_k,csc_k_view = get_cscsy_view(csc,V,inds=inds)
-    compl,compl_view = get_csc_view(csc,V,V_0,inds=inds)
+    # TODO: document what these are
+    csc_k, csc_k_view = get_cscsy_view(csc, V, inds=inds)
+    compl, compl_view = get_csc_view(csc, V, V_0, inds=inds)
     V_0_nz = findnz(compl.colptr)
 
-    M    = length(V) == 0 ?
-        EmptyLinearSolver() : SubproblemSolverModule.Solver(csc_k;option_dict=option_dict,logger=logger)
-        
-    w    = Vector{Float64}(undef,csc_k.n)
+    # sub-problem linear solver
+    solver = subproblem_solver{T}(csc_k; opt=options, logger=logger)
+    
+    # sub-problem step
+    w = Vector{Float64}(undef,csc_k.n)
 
-    return SolverWorker(V,V_0_nz,csc_k,csc_k_view,compl,compl_view,M,w)
+    return SolverWorker(V, V_0_nz, csc_k, csc_k_view, compl, compl_view, solver, w)
 end
 
 function findnz(colptr)
@@ -115,47 +145,46 @@ function findnz(colptr)
 end
 
 function factorize!(M::SchurLinearSolver)
-    M.schur.=0.
-    M.csc_0.nzval.=M.csc_0_view
-    M.schur.=M.csc_0
+    M.schur .= 0.
+    M.csc_0.nzval .= M.csc_0_view
+    M.schur .= M.csc_0
     @blas_safe_threads for sw in M.sws
-        sw.csc.nzval.=sw.csc_view
-        sw.compl.nzval.=sw.compl_view
+        sw.csc.nzval .= sw.csc_view
+        sw.compl.nzval .= sw.compl_view
         factorize!(sw.M)
     end
 
-    # asymchronous multithreading doesn't work here
+    # NOTE: asynchronous multithreading doesn't work here
     for q = 1:length(M.colors)
         @blas_safe_threads for k = 1:length(M.sws)
-            for j = M.colors[mod(q+k-1,length(M.sws))+1] # each subprob works on a different color
-                factorize_worker!(j,M.sws[k],M.schur)
+            for j = M.colors[mod(q+k-1, length(M.sws))+1] # each subproblem works on a different color
+                factorize_worker!(j, M.sws[k], M.schur)
             end
         end
     end
     factorize!(M.fact)
-
     return M
 end
 
 function factorize_worker!(j,sw,schur)
     j in sw.V_0_nz || return
-    sw.w.= view(sw.compl,:,j)
-    solve!(sw.M,sw.w)
-    mul!(view(schur,:,j),sw.compl',sw.w,-1.,1.)
+    sw.w.= view(sw.compl, :, j)
+    solve!(sw.M, sw.w)
+    mul!(view(schur, :, j), sw.compl', sw.w, -1., 1.)
 end
 
 
-function solve!(M::Solver,x::AbstractVector{Float64})
-    M.w_0 .= view(x,M.V_0)
+function solve!(M::Solver, x::AbstractVector{Float64})
+    M.w_0 .= view(x, M.V_0)
     @blas_safe_threads for sw in M.sws
-        sw.w.=view(x,sw.V)
-        solve!(sw.M,sw.w)
+        sw.w.=view(x, sw.V)
+        solve!(sw.M, sw.w)
     end
     for sw in M.sws
-        mul!(M.w_0,sw.compl',sw.w,-1.,1.)
+        mul!(M.w_0, sw.compl', sw.w, -1., 1.)
     end
-    solve!(M.fact,M.w_0)
-    view(x,M.V_0).=M.w_0
+    solve!(M.fact, M.w_0)
+    view(x, M.V_0) .= M.w_0
     @blas_safe_threads for sw in M.sws
         x_view = view(x,sw.V)
         sw.w.= x_view
@@ -167,6 +196,7 @@ function solve!(M::Solver,x::AbstractVector{Float64})
 end
 
 is_inertia(M::SchurLinearSolver) = is_inertia(M.fact) && is_inertia(M.sws[1].M)
+
 function inertia(M::SchurLinearSolver)
     numpos,numzero,numneg = inertia(M.fact)
     for k=1:M.opt.schur_num_parts

@@ -183,3 +183,5 @@ MOI.eval_constraint_jacobian(edge3, jac_values3, x3_eval)
 hess_lag_structure3 = MOI.hessian_lagrangian_structure(edge3)
 hess_values3 = zeros(length(hess_lag_structure3))
 MOI.eval_hessian_lagrangian(edge3, hess_values3, x3_eval, 1.0, ones(2))
+
+nlp = BlockNLPModel(optimizer)
