@@ -314,6 +314,14 @@ function get_nodes(edge::Edge)
 	return nodes
 end
 
+function self_edges(block::Block)
+	return filter((edge) -> edge isa Edge{Tuple{Node}}, block.edges)
+end
+
+function linking_edges(block::Block)
+	return filter((edge) -> !(edge isa Edge{Tuple{Node}}), block.edges)
+end
+
 function _num_variables(node::Node)
     return MOI.get(node, MOI.NumberOfVariables())
 end

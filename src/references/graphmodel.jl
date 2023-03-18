@@ -239,7 +239,7 @@ function get_partition(graph::OptiGraph, nlp::GraphModel)
     ind_ineq = findall(get_lcon(nlp).!=get_ucon(nlp))
     l = length(ind_ineq)
 
-    part = Vector{Int}(undef,n+m+l+p)
+    part = Vector{Int}(undef,n+l+m+p)
 
     for k=1:length(ninds)
         part[ninds[k]].=k

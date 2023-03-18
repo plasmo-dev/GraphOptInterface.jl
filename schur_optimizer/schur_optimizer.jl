@@ -105,47 +105,12 @@ function BOI.edge_model(optimizer::SchurOptimizer)
     return EdgeModel(optimizer)
 end
 
-
-
 const _SETS = Union{MOI.GreaterThan{Float64},MOI.LessThan{Float64},MOI.EqualTo{Float64}}
 
 const _FUNCTIONS = Union{
     MOI.ScalarAffineFunction{Float64},
     MOI.ScalarQuadraticFunction{Float64},
 }
-
-
-
-# function BOI.add_node!(optimizer::SchurOptimizer, index::BOI.BlockIndex)
-#     block = optimizer.block.block_by_index[index]
-#     node = BOI.add_node!(block, NodeModel(optimizer))
-# end
-
-# function BOI.add_edge!(optimizer::SchurOptimizer, index::BOI.BlockIndex, node::BOI.Node)
-#     block = optimizer.block.block_by_index[index]
-#     return BOI.add_edge!(block, node, EdgeModel(optimizer))
-# end
-
-# function BOI.add_edge!(optimizer::SchurOptimizer, index::BOI.BlockIndex, nodes::NTuple{N, BOI.Node} where N)
-#     block = optimizer.block.block_by_index[index]
-#     return BOI.add_edge!(block, nodes, EdgeModel(optimizer))
-# end
-
-# function BOI.add_edge!(optimizer::SchurOptimizer, index::BOI.BlockIndex, blocks::NTuple{N, BOI.Block} where N)
-#     block = optimizer.block.block_by_index[index]
-#     return BOI.add_edge!(block, blocks, EdgeModel(optimizer))
-# end
-
-# function BOI.add_edge!(optimizer::SchurOptimizer, index::BOI.BlockIndex, node::BOI.Node, block::BOI.Block)
-#     parent_block = optimizer.block.block_by_index[index]
-#     return BOI.add_edge!(parent_block, node, block, EdgeModel(optimizer))
-# end
-
-# TODO: figure out whether we can do these
-# MOI.supports_incremental_interface(::SchurOptimizer) = false
-# function MOI.copy_to(model::SchurOptimizer, src::BOI.ModelLike)
-#     return MOI.Utilities.default_copy_to(model, src)
-# end
 
 MOI.get(::SchurOptimizer, ::MOI.SolverName) = "MadNLP.Schur"
 
@@ -518,7 +483,96 @@ end
 struct BlockNLPModel{T} <: AbstractNLPModel{T,Vector{T}}
     meta::NLPModelMeta{T, Vector{T}}
     optimizer::SchurOptimizer
+    evaluator::MOI.AbstractNLPEvaluator#BlockEvaluator
     counters::NLPModels.Counters
+end
+
+function BlockNLPModel(optimizer::SchurOptimizer)
+
+    # initialize
+    block_evaluator = BOI.BlockEvaluator(optimizer.block)
+    MOI.initialize(block_evaluator, [:Grad, :Hess, :Jac])
+    block = optimizer.block
+    block_data = block_evaluator.block_data
+
+    # primals, lower, upper bounds
+    nvar = block_data.num_variables
+    x0 = Vector{Float64}(undef,nvar) # primal start
+    x_lower = Vector{Float64}(undef,nvar)
+    x_upper = Vector{Float64}(undef,nvar)
+    _fill_variable_info!(block, block_data, x0, x_lower, x_upper)
+
+    # duals, constraints lower & upper bounds
+    ncon = block_data.num_constraints
+    y0 = Vector{Float64}(undef, ncon) # dual start
+    c_lower = Vector{Float64}(undef, ncon)
+    c_upper = Vector{Float64}(undef, ncon)
+    _fill_constraint_info!(block, block_data, y0, c_lower, c_upper)
+
+    # Sparsity
+    nnzh = block_data.nnz_hess
+    nnzj = block_data.nnz_jac
+
+    optimizer.options[:jacobian_constant], optimizer.options[:hessian_constant] = false, false
+    optimizer.options[:dual_initialized] = !iszero(y0)
+
+    return BlockNLPModel(
+        NLPModelMeta(
+            nvar,
+            x0 = x0,
+            lvar = x_lower,
+            uvar = x_upper,
+            ncon = ncon,
+            y0 = y0,
+            lcon = c_lower,
+            ucon = c_upper,
+            nnzj = nnzj,
+            nnzh = nnzh,
+            minimize = optimizer.sense == MOI.MIN_SENSE
+        ),
+        optimizer,
+        block_evaluator,
+        NLPModels.Counters())
+end
+
+obj(nlp::BlockNLPModel,x::Vector{Float64}) = BOI.eval_objective(nlp.evaluator, x)
+
+function grad!(nlp::BlockNLPModel, x::Vector{Float64}, f::Vector{Float64})
+    BOI.eval_objective_gradient(nlp.evaluator, f, x)
+end
+
+function cons!(nlp::BlockNLPModel, x::Vector{Float64}, c::Vector{Float64})
+    BOI.eval_constraint(nlp.evaluator, c, x)
+end
+
+function jac_coord!(nlp::BlockNLPModel, x::Vector{Float64}, jac::Vector{Float64})
+    BOI.eval_constraint_jacobian(nlp.evaluator, jac, x)
+end
+
+function hess_coord!(
+    nlp::BlockNLPModel, 
+    x::Vector{Float64},
+    l::Vector{Float64},
+    hess::Vector{Float64};
+    obj_weight::Float64=1.
+)
+    BOI.eval_hessian_lagrangian(nlp.evaluator, hess, x, obj_weight, l)
+end
+
+function hess_structure!(nlp::BlockNLPModel, I::AbstractVector{T}, J::AbstractVector{T}) where T
+    cnt = 1
+    for (row, col) in  BOI.hessian_lagrangian_structure(nlp.evaluator)
+        I[cnt], J[cnt] = row, col
+        cnt += 1
+    end
+end
+
+function jac_structure!(nlp::BlockNLPModel, I::AbstractVector{T}, J::AbstractVector{T}) where T
+    cnt = 1
+    for (row, col) in  BOI.jacobian_structure(nlp.evaluator)
+        I[cnt], J[cnt] = row, col
+        cnt += 1
+    end
 end
 
 function _fill_variable_info!(block, block_data, x0, x_lower, x_upper)
@@ -588,156 +642,105 @@ function _fill_constraint_info!(block, block_data, y0, c_lower, c_upper)
     return
 end
 
-obj(nlp::BlockNLPModel,x::Vector{Float64}) = MOI.eval_objective(nlp.model,x)
-
-function grad!(nlp::BlockNLPModel,x::Vector{Float64},f::Vector{Float64})
-    MOI.eval_objective_gradient(nlp.model,f,x)
-end
-
-function cons!(nlp::BlockNLPModel,x::Vector{Float64},c::Vector{Float64})
-    MOI.eval_constraint(nlp.model,c,x)
-end
-
-function jac_coord!(nlp::BlockNLPModel,x::Vector{Float64},jac::Vector{Float64})
-    MOI.eval_constraint_jacobian(nlp.model,jac,x)
-end
-
-function hess_coord!(nlp::BlockNLPModel,x::Vector{Float64},l::Vector{Float64},hess::Vector{Float64}; obj_weight::Float64=1.)
-    MOI.eval_hessian_lagrangian(nlp.model,hess,x,obj_weight,l)
-end
-
-function hess_structure!(nlp::BlockNLPModel, I::AbstractVector{T}, J::AbstractVector{T}) where T
-    cnt = 1
-    for (row, col) in  MOI.hessian_lagrangian_structure(nlp.model)
-        I[cnt], J[cnt] = row, col
-        cnt += 1
+function MOI.optimize!(optimizer::SchurOptimizer)
+    optimizer.nlp = BlockMOIModel(optimizer)
+    if optimizer.silent
+        optimizer.options[:print_level] = MadNLP.ERROR
     end
+
+    # get block partitions from block structure
+    partition = get_partition_vector(optimizer)
+
+    # pass schur options
+    schur_options = SchurLinearOptions(partition)
+
+    optimizer.solver = MadNLP.MadNLPSolver(
+        optimizer.nlp;
+        linear_solver=SchurLinearSolver
+    )
+    optimizer.result = solve!(optimizer.solver)
+    optimizer.solve_time = optimizer.solver.cnt.total_time
+    optimizer.solve_iterations = optimizer.solver.cnt.k
+    return
 end
 
-function jac_structure!(nlp::BlockNLPModel, I::AbstractVector{T}, J::AbstractVector{T}) where T
-    cnt = 1
-    for (row, col) in  MOI.jacobian_structure(nlp.model)
-        I[cnt], J[cnt] = row, col
-        cnt += 1
+# Schur optimizer needs a two-stage partition
+function get_partition_vector(nlp::BlockNLPModel)
+    # TODO: explain inequality constraint elements in partition vector
+    if isempty(block.sub_blocks)
+        partition = _get_one_level_partition(nlp)
+    else
+        partition = _get_two_level_partition(nlp)
     end
+
+    return partition
 end
 
-function BlockNLPModel(model::SchurOptimizer)
+# the nodes are the blocks in this case
+function _get_one_level_partition(nlp::BlockNLPModel)
+    block = nlp.optimizer.block
+    block_data = nlp.evaluator.block_data
+    num_var = nlp.meta.nvar
+    num_con = nlp.meta.ncon
+    ind_ineq = findall(get_lcon(nlp).!=get_ucon(nlp))
 
-    # initialize
-    block_evaluator = BOI.BlockEvaluator(model.block)
-    MOI.initialize(block_evaluator, [:Grad, :Hess, :Jac])
-    block = model.block
-    block_data = block_evaluator.block_data
+    # TODO: explain why we have separate inequality constraints
+    columns = Vector{Int}(undef, num_var)
+    rows = Vector{Int}(undef, num_con)
 
-    # primals, lower, upper bounds
-    nvar = block_data.num_variables
-    x0 = Vector{Float64}(undef,nvar) # primal start
-    x_lower = Vector{Float64}(undef,nvar)
-    x_upper = Vector{Float64}(undef,nvar)
-    _fill_variable_info!(block, block_data, x0, x_lower, x_upper)
+    for node in block.nodes
+        k = node.index
+        node_columns = block_data.node_data[node]
+        columns[node_columns] .= k
+    end
 
-    # duals, constraints lower & upper bounds
-    ncon = block_data.num_constraints
-    y0 = Vector{Float64}(undef, ncon) # dual start
-    c_lower = Vector{Float64}(undef, ncon)
-    c_upper = Vector{Float64}(undef, ncon)
-    _fill_constraint_info!(block, block_data, y0, c_lower, c_upper)
+    for edge in BOI.self_edges(block)
+        k = edge.elements[1].index
+        edge_rows = block_data.edge_data[edge].row_indices
+        rows[edge_rows] .= k
+    end
 
-    # Sparsity
-    nnzh = block_data.nnz_hess
-    nnzj = block_data.nnz_jac
+    for edge in BOI.linking_edges(block)
+        edge_rows = block_data.edge_data[edge].row_indices
+        rows[edge_rows] .= 0
+    end
 
-    model.options[:jacobian_constant], model.options[:hessian_constant] = false, false
-    model.options[:dual_initialized] = !iszero(y0)
+    # get inequality partitions
+    ineq_rows = rows[ind_ineq] 
+    partition = [columns; ineq_rows; rows]
 
-    return BlockNLPModel(
-        NLPModelMeta(
-            nvar,
-            x0 = x0,
-            lvar = x_lower,
-            uvar = x_upper,
-            ncon = ncon,
-            y0 = y0,
-            lcon = c_lower,
-            ucon = c_upper,
-            nnzj = nnzj,
-            nnzh = nnzh,
-            minimize = model.sense == MOI.MIN_SENSE
-        ),
-        model,
-        NLPModels.Counters())
+    return partition
 end
 
-# # Optimize!
-# function MOI.optimize!(model::SchurOptimizer)
-#     model.nlp = BlockMOIModel(model)
-#     if model.silent
-#         model.options[:print_level] = MadNLP.ERROR
-#     end
+# the sub-blocks are the blocks in this case
+function _get_two_level_partition(nlp::BlockNLPModel)
+    block = nlp.optimizer.block
+    block_data = nlp.evaluator.block_data
+    num_var = nlp.meta.nvar
+    num_con = nlp.meta.ncon
+    ind_ineq = findall(get_lcon(nlp).!=get_ucon(nlp))
 
-#     # get block partitions from block structure
-#     partitions = get_block_partitions(model)
+    columns = Vector{Int}(undef, num_var)
+    rows = Vector{Int}(undef, num_con)
 
-#     # pass schur options
-#     schur_options = SchurLinearOptions()
+    for node in block.nodes
+        node_columns = block_data[node]
+        columns[node_columns] .= 0
+    end
 
-#     model.solver = MadNLP.MadNLPSolver(
-#         model.nlp; 
-#         linear_solver=SchurLinearSolver,
-#         model.options...
-#     )
-#     model.result = solve!(model.solver)
-#     model.solve_time = model.solver.cnt.total_time
-#     model.solve_iterations = model.solver.cnt.k
-#     return
-# end
+    for edge in BOI.self_edges(block)
+        edge_rows = block_data.edge_data[edge].row_indices
+        rows[edge_rows] .= 0
+    end
 
-# # Schur optimizer needs a two-stage partition
-# function get_block_partitions(optimizer::SchurOptimizer)
+    # we only support one level of hierarchy, so we assume sub-blocks are nodes
+    for sub_block in block.sub_blocks
+        sb_data = block_data.sub_block_data[sub_block.index]
+        block_node_columns = #
+        block_edge_columns = #
 
-#     # IDEA: use block to get indices
-#     # pinds should come from linking edges
-
-#     n = nlp.ext[:n]
-#     m = nlp.ext[:m]
-#     p = nlp.ext[:p]
-
-#     ninds = nlp.ninds
-#     minds = nlp.minds
-#     pinds = nlp.pinds
+        columns[block_node_columns] .= sub_block.index
+    end
 
 
-
-#     # this is an NLP function. try getting this from the block
-#     ind_ineq = findall(get_lcon(nlp).!=get_ucon(nlp))
-#     l = length(ind_ineq)
-
-#     partition = Vector{Int}(undef,n+m+l+p)
-
-#     for k=1:length(ninds)
-#         part[ninds[k]].=k
-#     end
-#     for k=1:length(minds)
-#         part[minds[k].+n.+l].=k
-#     end
-
-#     # loop through edges
-#     cnt = 0
-
-#     # for linkedge in nlp.ext[:linkedges]
-#     #     for (ind,con) in linkedge.linkconstraints
-#     #         cnt+=1
-#     #         attached_node_idx = graph.node_idx_map[con.attached_node]
-#     #         part[n+l+m+cnt] = attached_node_idx != nothing ? attached_node_idx : error("All the link constraints need to be attached to a node")
-#     #     end
-#     # end
-
-#     cnt = 0
-#     for q in ind_ineq
-#         cnt+=1
-#         part[n+cnt] = part[n+l+q]
-#     end
-
-#     return partition
-# end
+end
