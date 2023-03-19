@@ -6,8 +6,7 @@ using MadNLP
 
 nlp = BlockNLPModel(optimizer)
 partition = get_partition_vector(nlp)
-schur_opt = SchurOptions()
-schur_opt.partition = partition
+schur_opt = SchurOptions(partition=partition)
 
 # TODO: test that the linear solver works
 madnlpsolver = MadNLP.MadNLPSolver(nlp)
