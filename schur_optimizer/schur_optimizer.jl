@@ -535,21 +535,21 @@ function BlockNLPModel(optimizer::SchurOptimizer)
         NLPModels.Counters())
 end
 
-obj(nlp::BlockNLPModel,x::Vector{Float64}) = BOI.eval_objective(nlp.evaluator, x)
+NLPModels.obj(nlp::BlockNLPModel,x::Vector{Float64}) = BOI.eval_objective(nlp.evaluator, x)
 
-function grad!(nlp::BlockNLPModel, x::Vector{Float64}, f::Vector{Float64})
+function NLPModels.grad!(nlp::BlockNLPModel, x::Vector{Float64}, f::Vector{Float64})
     MOI.eval_objective_gradient(nlp.evaluator, f, x)
 end
 
-function cons!(nlp::BlockNLPModel, x::Vector{Float64}, c::Vector{Float64})
+function NLPModels.cons!(nlp::BlockNLPModel, x::Vector{Float64}, c::Vector{Float64})
     MOI.eval_constraint(nlp.evaluator, c, x)
 end
 
-function jac_coord!(nlp::BlockNLPModel, x::Vector{Float64}, jac::Vector{Float64})
+function NLPModels.jac_coord!(nlp::BlockNLPModel, x::Vector{Float64}, jac::Vector{Float64})
     MOI.eval_constraint_jacobian(nlp.evaluator, jac, x)
 end
 
-function hess_coord!(
+function NLPModels.hess_coord!(
     nlp::BlockNLPModel, 
     x::Vector{Float64},
     l::Vector{Float64},
@@ -559,7 +559,7 @@ function hess_coord!(
     MOI.eval_hessian_lagrangian(nlp.evaluator, hess, x, obj_weight, l)
 end
 
-function hess_structure!(nlp::BlockNLPModel, I::AbstractVector{T}, J::AbstractVector{T}) where T
+function NLPModels.hess_structure!(nlp::BlockNLPModel, I::AbstractVector{T}, J::AbstractVector{T}) where T
     cnt = 1
     for (row, col) in MOI.hessian_lagrangian_structure(nlp.evaluator)
         I[cnt], J[cnt] = row, col
@@ -567,7 +567,7 @@ function hess_structure!(nlp::BlockNLPModel, I::AbstractVector{T}, J::AbstractVe
     end
 end
 
-function jac_structure!(nlp::BlockNLPModel, I::AbstractVector{T}, J::AbstractVector{T}) where T
+function NLPModels.jac_structure!(nlp::BlockNLPModel, I::AbstractVector{T}, J::AbstractVector{T}) where T
     cnt = 1
     for (row, col) in  MOI.jacobian_structure(nlp.evaluator)
         I[cnt], J[cnt] = row, col
@@ -679,7 +679,7 @@ function get_partition_vector(nlp::BlockNLPModel)
     return partition
 end
 
-# the nodes are the blocks in this case
+# the nodes are the 'blocks' in this case
 function _get_one_level_partition(nlp::BlockNLPModel)
     block = nlp.optimizer.block
     block_data = nlp.evaluator.block_data
@@ -687,7 +687,7 @@ function _get_one_level_partition(nlp::BlockNLPModel)
     num_con = nlp.meta.ncon
     ind_ineq = findall(get_lcon(nlp).!=get_ucon(nlp))
 
-    # TODO: explain why we have separate inequality constraints
+    # TODO: explain why we separate the inequality constraints?
     columns = Vector{Int}(undef, num_var)
     rows = Vector{Int}(undef, num_con)
 
@@ -706,6 +706,10 @@ function _get_one_level_partition(nlp::BlockNLPModel)
     for edge in BOI.linking_edges(block)
         edge_rows = block_data.edge_data[edge].row_indices
         rows[edge_rows] .= 0
+
+        # linked variables are moved to 0 partition
+        edge_columns = block_data.edge_data[edge].column_indices
+        columns[edge_columns] .= 0
     end
 
     # get inequality partitions
@@ -715,7 +719,7 @@ function _get_one_level_partition(nlp::BlockNLPModel)
     return partition
 end
 
-# the sub-blocks are the blocks in this case
+# the sub-blocks are the 'blocks' in this case
 function _get_two_level_partition(nlp::BlockNLPModel)
     block = nlp.optimizer.block
     block_data = nlp.evaluator.block_data
