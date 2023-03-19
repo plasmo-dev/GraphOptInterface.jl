@@ -1,7 +1,10 @@
+
+
 const INPUT_MATRIX_TYPE = :csc
 
 import MadNLP: AbstractOptions, AbstractLinearSolver, MadNLPLogger, SubVector, 
-default_linear_solver, default_dense_solver, default_options
+default_linear_solver, default_dense_solver, default_options, get_cscsy_view, get_csc_view,
+factorize!, solve!, mul!
 
 Base.@kwdef mutable struct SchurOptions <: AbstractOptions
     partition::Vector{Int}=Vector{Int}()
@@ -20,6 +23,33 @@ mutable struct SolverWorker{T,ST<:AbstractLinearSolver}
     compl_view::SubVector{T}
     M::ST
     w::Vector{T}
+end
+function SolverWorker(
+    partition::Vector{Int}, 
+    V_0::Vector{Int},
+    csc::SparseMatrixCSC{T},
+    inds::Vector{Int},
+    k::Int,
+    subproblem_solver::Type{ST},
+    options::AbstractOptions,
+    logger::MadNLPLogger
+) where T where ST <: AbstractLinearSolver
+
+    # partition indices
+    V = findall(partition.==k)
+
+    # TODO: document what these are
+    csc_k, csc_k_view = get_cscsy_view(csc, V, inds=inds)
+    compl, compl_view = get_csc_view(csc, V, V_0, inds=inds)
+    V_0_nz = findnz(compl.colptr)
+
+    # sub-problem linear solver
+    lin_solver = subproblem_solver(csc_k; opt=options, logger=logger)
+    
+    # sub-problem step
+    w = Vector{T}(undef,csc_k.n)
+
+    return SolverWorker{T,ST}(V, V_0_nz, csc_k, csc_k_view, compl, compl_view, lin_solver, w)
 end
 
 mutable struct SchurLinearSolver{T} <: AbstractLinearSolver{T}
@@ -49,14 +79,16 @@ function SchurLinearSolver(
 	logger=MadNLPLogger()
 ) where T
 
-    if string(opt.schur_subproblem_solver) == "MadNLP.Mumps"
+    if string(opt.subproblem_solver) == "MadNLP.Mumps"
         @warn(logger,"When Mumps is used as a subproblem solver, Schur is run in serial.")
         @warn(logger,"To use parallelized Schur, use Ma27 or Ma57.")
     end
 
+    @assert !(isempty(opt.partition))
+
     # non-zeros in KKT
     inds = collect(1:nnz(csc))
-    num_partitions = unique(partition)
+    num_partitions = length(unique(opt.partition))-1 #do not count 0 as a partition
 
     # first stage indices
     V_0   = findall(partition.==0)
@@ -70,14 +102,14 @@ function SchurLinearSolver(
     w_0 = Vector{Float64}(undef, length(V_0))
 
     # solver-workers
-    sws = Vector{SolverWorker{opt.schur_subproblem_solver}}(undef, num_partitions)
+    sws = Vector{SolverWorker{T,opt.subproblem_solver}}(undef, num_partitions)
 
     Threads.@threads for k=1:num_partitions
-        sws[k] = SolverWorker{opt.schur_subproblem_solver}(
-            partition, 
-            V_0, 
+        sws[k] = SolverWorker(
+            partition,
+            V_0,
             csc,
-            inds, 
+            inds,
             k,
             opt.subproblem_solver,
             opt.subproblem_solver_options,
@@ -86,12 +118,12 @@ function SchurLinearSolver(
     end
 
     # dense system solver
-    fact = opt.dense_solver{T}(schur_matrix; opt=opt.dense_solver_options)
+    fact = opt.dense_solver(schur_matrix; opt=opt.dense_solver_options, logger=logger)
 
     return SchurLinearSolver{T}(
         csc, 
         inds,
-        partitions,
+        opt.partition,
         num_partitions,
         schur_matrix,
         colors,
@@ -106,35 +138,7 @@ function SchurLinearSolver(
     )
 end
 
-get_colors(n0, K) = [findall((x)->mod(x-1,K)+1==k,1:n0) for k=1:K]
-
-function SolverWorker(
-    partition::Vector{Int}, 
-    V_0::Vector{Int},
-    csc::SparseMatrixCSC{T},
-    inds::Vector{Int},
-    k::Int,
-    subproblem_solver::Type{ST},
-    options::AbstractOptions,
-    logger::MadNLPLogger
-) where T where ST <: AbstractLinearSolver
-
-    # partition indices
-    V = findall(partition.==k)
-
-    # TODO: document what these are
-    csc_k, csc_k_view = get_cscsy_view(csc, V, inds=inds)
-    compl, compl_view = get_csc_view(csc, V, V_0, inds=inds)
-    V_0_nz = findnz(compl.colptr)
-
-    # sub-problem linear solver
-    solver = subproblem_solver{T}(csc_k; opt=options, logger=logger)
-    
-    # sub-problem step
-    w = Vector{T}(undef,csc_k.n)
-
-    return SolverWorker(V, V_0_nz, csc_k, csc_k_view, compl, compl_view, solver, w)
-end
+get_colors(n0::Int, K::Int) = [findall((x)->mod(x-1,K)+1==k,1:n0) for k=1:K]
 
 function findnz(colptr)
     nz = Int[]
@@ -172,7 +176,6 @@ function factorize_worker!(j,sw,schur)
     solve!(sw.M, sw.w)
     mul!(view(schur, :, j), sw.compl', sw.w, -1., 1.)
 end
-
 
 function solve!(M::SchurLinearSolver, x::AbstractVector{T}) where T
     M.w_0 .= view(x, M.V_0)
