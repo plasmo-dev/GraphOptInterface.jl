@@ -58,7 +58,7 @@ mutable struct SchurLinearSolver{T} <: AbstractLinearSolver{T}
     partitions::Vector{Int}
     num_partitions::Int
 
-    schur::Matrix{Float64}
+    schur::Matrix{T}
     colors
     fact # dense solver
 
@@ -170,7 +170,7 @@ function factorize!(M::SchurLinearSolver)
     return M
 end
 
-function factorize_worker!(j,sw,schur)
+function factorize_worker!(j, sw, schur)
     j in sw.V_0_nz || return
     sw.w.= view(sw.compl, :, j)
     solve!(sw.M, sw.w)

@@ -118,6 +118,20 @@ MOI.get(::SchurOptimizer, ::MOI.SolverName) = "MadNLP.Schur"
 
 MOI.supports(::SchurOptimizer, ::MOI.Name) = true
 
+MOI.supports(::SchurOptimizer, ::MOI.ObjectiveSense) = true
+
+function MOI.set(
+    model::SchurOptimizer,
+    ::MOI.ObjectiveSense,
+    sense::MOI.OptimizationSense,
+)
+    model.sense = sense
+    model.solver = nothing
+    return
+end
+
+MOI.get(model::SchurOptimizer, ::MOI.ObjectiveSense) = model.sense
+
 function MOI.set(model::SchurOptimizer, ::MOI.Name, value::String)
     model.name = value
     return
@@ -411,7 +425,7 @@ end
 
 ### Eval_F_CB
 
-function MOI.eval_objective(edge::EdgeModel, x)
+function MOI.eval_objective(edge::EdgeModel, x::AbstractArray{T}) where T
     if edge.sense == MOI.FEASIBILITY_SENSE
         return 0.0
     elseif edge.nlp_data.has_objective
@@ -422,7 +436,7 @@ end
 
 ### Eval_Grad_F_CB
 
-function MOI.eval_objective_gradient(edge::EdgeModel, grad, x)
+function MOI.eval_objective_gradient(edge::EdgeModel, grad::AbstractArray{T}, x::AbstractArray{T}) where T
     if edge.sense == MOI.FEASIBILITY_SENSE
         grad .= zero(eltype(grad))
     elseif edge.nlp_data.has_objective
@@ -435,7 +449,7 @@ end
 
 ### Eval_G_CB
 
-function MOI.eval_constraint(edge::EdgeModel, g, x)
+function MOI.eval_constraint(edge::EdgeModel, g::AbstractArray{T}, x::AbstractArray{T}) where T
     MOI.eval_constraint(edge.qp_data, g, x)
     g_nlp = view(g, (length(edge.qp_data)+1):length(g))
     MOI.eval_constraint(edge.nlp_data.evaluator, g_nlp, x)
@@ -455,7 +469,7 @@ function MOI.jacobian_structure(edge::EdgeModel)
     return J
 end
 
-function MOI.eval_constraint_jacobian(edge::EdgeModel, values, x)
+function MOI.eval_constraint_jacobian(edge::EdgeModel, values::AbstractArray{T}, x::AbstractArray{T}) where T
     offset = MOI.eval_constraint_jacobian(edge.qp_data, values, x)
     nlp_values = view(values, (offset+1):length(values))
     MOI.eval_constraint_jacobian(edge.nlp_data.evaluator, nlp_values, x)
@@ -470,7 +484,7 @@ function MOI.hessian_lagrangian_structure(edge::EdgeModel)
     return H
 end
 
-function MOI.eval_hessian_lagrangian(edge::EdgeModel, H, x, σ, μ)
+function MOI.eval_hessian_lagrangian(edge::EdgeModel, H::AbstractArray{T}, x::AbstractArray{T}, σ::Float64, μ::AbstractArray{T}) where T
     offset = MOI.eval_hessian_lagrangian(edge.qp_data, H, x, σ, μ)
     H_nlp = view(H, (offset+1):length(H))
     μ_nlp = view(μ, (length(edge.qp_data)+1):length(μ))
@@ -535,7 +549,7 @@ function BlockNLPModel(optimizer::SchurOptimizer)
         NLPModels.Counters())
 end
 
-NLPModels.obj(nlp::BlockNLPModel,x::Vector{Float64}) = BOI.eval_objective(nlp.evaluator, x)
+NLPModels.obj(nlp::BlockNLPModel, x::Vector{Float64}) = MOI.eval_objective(nlp.evaluator, x)
 
 function NLPModels.grad!(nlp::BlockNLPModel, x::Vector{Float64}, f::Vector{Float64})
     MOI.eval_objective_gradient(nlp.evaluator, f, x)
@@ -613,6 +627,8 @@ function _fill_constraint_info!(block, block_data, y0, c_lower, c_upper)
         model = edge.model
         g_L = copy(model.qp_data.g_L)
         g_U = copy(model.qp_data.g_U)
+
+        # BUG?: this might be  wrong. not correct indices
         for bound in model.nlp_data.constraint_bounds
             push!(g_L, bound.lower)
             push!(g_U, bound.upper)
