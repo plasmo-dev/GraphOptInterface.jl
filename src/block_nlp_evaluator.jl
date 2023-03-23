@@ -346,7 +346,8 @@ function eval_objective_gradient(
         columns = edge_data.column_indices
         MOI.eval_objective_gradient(edge, view(edge_gradients[i],columns), view(x,columns))
     end
-    gradient[:] += sum(edge_gradients)
+    # plus? or just assign?
+    gradient[:] .= sum(edge_gradients)
 
     # evaluate sub blocks
     Threads.@threads for i = 1:length(block.sub_blocks)
@@ -388,7 +389,7 @@ function eval_constraint(
         sub_block_data = block_data.sub_block_data[sub_block.index]
         eval_constraint(sub_block, sub_block_data, c, x)
     end
-
+    
     return
 end
 
