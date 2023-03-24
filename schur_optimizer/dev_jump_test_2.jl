@@ -2,19 +2,18 @@ using JuMP
 using MadNLP
 
 c1 = [1.0, 2.0, 3.0]
-w1 = [0.3, 0.5, 1.0]
-C1 = 3.2
-
-
 m = Model()
-
 @variable(m, 0<= x1[1:3] <= 5)
-@NLobjective(m, Max, sum(c1[i]*x1[i] for i = 1:3))
+@objective(m, Max, sum(c1[i]*x1[i] for i = 1:3))
 @NLconstraint(m, 1 + sqrt(x1[1]) <= 5.0)
-
 
 set_optimizer(m, MadNLP.Optimizer)
 optimize!(m)
+
+
+# solver = m.moi_backend.optimizer.model.solver
+# solver.linear_solver
+
 
 joptimizer = m.moi_backend.optimizer.model
 jnlp = joptimizer.nlp
@@ -29,7 +28,7 @@ c_upper = jnlp.meta.ucon
 
 moi_obj = MOI.eval_objective(joptimizer, x_moi)
 
-# # gradient
+# gradient
 grad_moi = zeros(length(x_moi))
 MOI.eval_objective_gradient(joptimizer, grad_moi, x_moi)
 

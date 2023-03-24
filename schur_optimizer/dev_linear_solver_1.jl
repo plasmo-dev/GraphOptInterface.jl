@@ -1,28 +1,35 @@
-include("dev_schur_optimizer.jl")
-
 include("schur_linear.jl")
+
+include(joinpath(@__DIR__,"example_1_two_nodes.jl"))
 
 using MadNLP
 
 nlp = BlockNLPModel(optimizer)
-
-# TODO: test that the block evaluator actually works
-madnlpsolver = MadNLP.MadNLPSolver(nlp)
-MadNLP.solve!(madnlpsolver)
-
-
 partition = get_partition_vector(nlp)
-schur_opt = SchurOptions(partition=partition)
-# kkt = MadNLP.get_kkt(madnlpsolver.kkt)
-schur_linear = SchurLinearSolver(kkt; opt=schur_opt)
 
-mad_opt = MadNLPOptions(linear_solver=SchurLinearSolver)
-MadNLP.MadNLPSolver(nlp, mad_opt, schur_opt)
+solver1 = MadNLPSolver(nlp)
+MadNLP.solve!(solver1)
 
-# # this works, but not sure how to test. the subproblem solvers are also throwing buffer errors for printing.
+solver2 = MadNLP.MadNLPSolver(nlp, linear_solver=SchurLinearSolver, partition=partition)
+MadNLP.solve!(solver2)
+
+
+# schur_opt = SchurOptions(
+# 	partition=partition, 
+# 	subproblem_solver=MadNLP.LapackCPUSolver,
+# 	subproblem_solver_options=MadNLP.LapackOptions()
+# )
+
+# Test schur linear solver using the solver KKT system
+# kkt = MadNLP.get_kkt(solver1.kkt)
+# schur_linear = SchurLinearSolver(kkt; opt=schur_opt)
 # MadNLP.factorize!(schur_linear)
-solver = MadNLP.MadNLPSolver{T,MadNLP.KKTSystem}(nlp, mad_opt, schur_opt) where {T, MadNLP.KKTSystem<:MadNLP.AbstractKKTSystem{T}}
+# x_test = MadNLP.solve!(schur_linear, ones(length(partition)))
 
+# solver = MadNLP.MadNLPSolver{T,KKTSystem}(nlp, mad_opt, schur_opt) where {T,KKTSystem<:MadNLP.AbstractKKTSystem{T}}
 
-# TODO: figure out how to pass schur linear solver with options
 #madnlpsolver = MadNLP.MadNLPSolver(nlp; linear_solver=SchurLinearSolver, partition=partition)
+
+# try instantiating a MadNLP solver
+# schur_opt = SchurOptions(partition=partition)
+# mad_opt = MadNLPOptions(linear_solver=SchurLinearSolver)

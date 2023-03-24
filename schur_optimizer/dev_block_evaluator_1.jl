@@ -1,4 +1,4 @@
-include("dev_schur_optimizer.jl")
+include(joinpath(@__DIR__,"example_1_two_nodes.jl"))
 
 block_evaluator = BOI.BlockEvaluator(optimizer.block)
 MOI.initialize(block_evaluator, [:Grad, :Jac, :Hess])

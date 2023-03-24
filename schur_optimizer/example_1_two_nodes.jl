@@ -17,6 +17,7 @@ x1 = MOI.add_variables(optimizer, node1, 3)
 # constraints/bounds on variables
 for x_i in x1
    MOI.add_constraint(optimizer, node1, x_i, MOI.GreaterThan(0.0))
+   MOI.add_constraint(optimizer, node1, x_i, MOI.LessThan(5.0))
 end
 
 edge1 = BOI.add_edge!(optimizer, node1)
@@ -43,53 +44,25 @@ ci = MOI.add_constraint(
 
 # add edge1 nonlinear constraint
 nlp1 = MOI.Nonlinear.Model()
-MOI.Nonlinear.add_constraint(nlp1, :(1 + sqrt($(x1[1]))), MOI.LessThan(2.0))
+# MOI.Nonlinear.set_objective(nlp1, :($(c1[1])*$(x1[1]) + $(c1[2])*$(x1[2]) + $(c1[3])*$(x1[3])))
+MOI.Nonlinear.add_constraint(nlp1, :(1.0 + sqrt($(x1[1]))), MOI.LessThan(5.0))
 evaluator1 = MOI.Nonlinear.Evaluator(nlp1, MOI.Nonlinear.SparseReverseMode(), x1)
-MOI.initialize(evaluator1, [:Grad, :Jac, :Hess])
 block1 = MOI.NLPBlockData(evaluator1)
 MOI.set(edge1, MOI.NLPBlock(), block1)
-
-# evaluate edge 1 NLP functions
-# objective
-x1_eval = [1.0, 1.0, 1.0]
-edge1_obj = MOI.eval_objective(edge1, x1_eval)
-
-# constraints
-g1_eval = zeros(2)
-MOI.eval_constraint(edge1, g1_eval, x1_eval)
-
-# gradient
-grad1_eval = zeros(3)
-MOI.eval_objective_gradient(edge1, grad1_eval, x1_eval)
-
-# jacobian
-jac_structure1 = MOI.jacobian_structure(edge1)
-jac_values1 = zeros(length(jac_structure1))
-MOI.eval_constraint_jacobian(edge1, jac_values1, x1_eval)
-
-# hessian
-hess_lag_structure1 = MOI.hessian_lagrangian_structure(edge1)
-hess_values1 = zeros(length(hess_lag_structure1))
-MOI.eval_hessian_lagrangian(edge1, hess_values1, x1_eval, 1.0, ones(2))
-
 
 ##################################################
 # node 2 and edge 2
 ##################################################
 node2 = BOI.add_node!(optimizer)
-
-# NOTE: returns optimizer index, not node index
 x2 = MOI.add_variables(optimizer, node2, 3)
 for x_i in x2
    MOI.add_constraint(optimizer, node2, x_i, MOI.GreaterThan(0.0))
+   MOI.add_constraint(optimizer, node2, x_i, MOI.LessThan(5.0))
 end
-
 edge2 = BOI.add_edge!(optimizer, node2)
-
 c2 = [2.0, 3.0, 4.0]
 w2 = [0.2, 0.1, 1.2]
 C2 = 2.0
-
 MOI.set(
 	edge2,
 	MOI.ObjectiveFunction{MOI.ScalarAffineFunction{Float64}}(),
@@ -102,50 +75,21 @@ MOI.add_constraint(
     MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.(w2, x2), 0.0),
     MOI.LessThan(C2)
 )
-
 nlp2 = MOI.Nonlinear.Model()
-
 MOI.Nonlinear.add_constraint(nlp2, :(1.0 + sqrt($(x2[2]))), MOI.LessThan(3.0))
 evaluator2 = MOI.Nonlinear.Evaluator(nlp2, MOI.Nonlinear.SparseReverseMode(), x2)
-MOI.initialize(evaluator2, [:Grad, :Jac, :Hess])
 block2 = MOI.NLPBlockData(evaluator2)
 MOI.set(edge2, MOI.NLPBlock(), block2)
-
-# evaluate edge 2 NLP functions
-# objective
-x2_eval = [1.0, 1.0, 1.0]
-edge2_obj = MOI.eval_objective(edge2, x2_eval)
-
-# constriants
-g2_eval = zeros(2)
-MOI.eval_constraint(edge2, g2_eval, x2_eval)
-
-# gradient
-grad2_eval = zeros(3)
-MOI.eval_objective_gradient(edge2, grad2_eval, x2_eval)
-
-# jacobian
-jac_structure2 = MOI.jacobian_structure(edge2)
-jac_values2 = zeros(length(jac_structure2))
-MOI.eval_constraint_jacobian(edge2, jac_values2, x2_eval)
-
-# hessian
-hess_lag_structure2 = MOI.hessian_lagrangian_structure(edge2)
-hess_values2 = zeros(length(hess_lag_structure2))
-MOI.eval_hessian_lagrangian(edge2, hess_values2, x2_eval, 1.0, ones(2))
 
 ##################################################
 # edge 3 - couple node1 and node2
 ##################################################
 edge3 = BOI.add_edge!(optimizer, BOI.BlockIndex(0), (node1, node2))
-
 # add variables to edge
 BOI.add_edge_variable!(optimizer.block, edge3, node1, node1[1])
 BOI.add_edge_variable!(optimizer.block, edge3, node2, node2[1])
 BOI.add_edge_variable!(optimizer.block, edge3, node2, node2[3])
-
 x3 = BOI.variable_indices(optimizer.block, edge3)
-
 MOI.add_constraint(
     optimizer,   
     edge3,
@@ -155,32 +99,6 @@ MOI.add_constraint(
 nlp3 = MOI.Nonlinear.Model()
 MOI.Nonlinear.add_constraint(nlp3, :(1.0 + sqrt($(x3[1])) + $(x3[3])^3), MOI.LessThan(5.0))
 evaluator3 = MOI.Nonlinear.Evaluator(nlp3, MOI.Nonlinear.SparseReverseMode(), x3)
-MOI.initialize(evaluator3, [:Grad, :Jac, :Hess])
 block3 = MOI.NLPBlockData(evaluator3)
 MOI.set(edge3, MOI.NLPBlock(), block3)
-
-# evaluate edge 3 NLP functions
-# specify a sparse vector of variable indices and values
-x3_eval = [1.0, 1.0, 1.0]
-
-# objective
-edge3_obj = MOI.eval_objective(edge3, x3_eval)
-
-# constraints
-g3_eval = zeros(2)
-MOI.eval_constraint(edge3, g3_eval, x3_eval)
-
-# gradient
-grad3_eval = zeros(3)
-MOI.eval_objective_gradient(edge3, grad3_eval, x3_eval)
-
-# jacobian
-jac_structure3 = MOI.jacobian_structure(edge3)
-jac_values3 = zeros(length(jac_structure3))
-MOI.eval_constraint_jacobian(edge3, jac_values3, x3_eval)
-
-# hessian
-hess_lag_structure3 = MOI.hessian_lagrangian_structure(edge3)
-hess_values3 = zeros(length(hess_lag_structure3))
-MOI.eval_hessian_lagrangian(edge3, hess_values3, x3_eval, 1.0, ones(2))
-
+MOI.set(edge3, MOI.ObjectiveSense(), MOI.MAX_SENSE)

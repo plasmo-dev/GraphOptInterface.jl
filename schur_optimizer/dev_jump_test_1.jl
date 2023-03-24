@@ -5,7 +5,6 @@ c1 = [1.0, 2.0, 3.0]
 w1 = [0.3, 0.5, 1.0]
 C1 = 3.2
 
-
 m = Model()
 
 @variable(m, x1[1:3] >= 0)
@@ -33,21 +32,18 @@ obj2 = @expression(m, sum(c2[i]*x2[i] for i = 1:3))
 set_optimizer(m, MadNLP.Optimizer)
 optimize!(m)
 
+
+### pull out the madnlp optimizer to test derivatives
+
 joptimizer = m.moi_backend.optimizer.model
 jnlp = joptimizer.nlp
 jsolver = MadNLP.MadNLPSolver(jnlp)
 MadNLP.solve!(jsolver)
 
-
-x_moi = ones(6)*2
+x_moi = ones(6)
 c_moi = zeros(6)
 MOI.eval_constraint(joptimizer, c_moi, x_moi)
 c_upper = jnlp.meta.ucon
-
-# # TODO: test NLP evaluations
-# moi_evaluator = JuMP.NLPEvaluator(m)
-
-# MOI.initialize(moi_evaluator, [:Grad, :Hess, :Jac])
 
 x_moi = ones(6)
 moi_obj = MOI.eval_objective(joptimizer, x_moi)

@@ -1,17 +1,19 @@
+using SparseArrays
 
-
-const INPUT_MATRIX_TYPE = :csc
+using MadNLP
 
 import MadNLP: AbstractOptions, AbstractLinearSolver, MadNLPLogger, SubVector, 
 default_linear_solver, default_dense_solver, default_options, get_cscsy_view, get_csc_view,
-factorize!, solve!, mul!
+factorize!, solve!, mul!, intertia, is_inertia, introduce, improve!
 
-Base.@kwdef mutable struct SchurOptions <: AbstractOptions
+# LST => Linear Solver Type
+# DST => Dense Solver Type
+Base.@kwdef mutable struct SchurOptions{LST<:AbstractLinearSolver,DST<:AbstractLinearSolver} <: AbstractOptions
     partition::Vector{Int}=Vector{Int}()
-    subproblem_solver::Type{default_linear_solver()}=default_linear_solver()
-    subproblem_solver_options::AbstractOptions=default_options(default_linear_solver())
-    dense_solver::Type{default_dense_solver()}=default_dense_solver()
-    dense_solver_options::AbstractOptions=default_options(default_dense_solver())
+    subproblem_solver::Type{LST}=default_linear_solver()
+    subproblem_solver_options::AbstractOptions=default_options(subproblem_solver)
+    dense_solver::Type{DST}=default_dense_solver()
+    dense_solver_options::AbstractOptions=default_options(dense_solver)
 end
 
 mutable struct SolverWorker{T,ST<:AbstractLinearSolver}
@@ -189,10 +191,10 @@ function solve!(M::SchurLinearSolver, x::AbstractVector{T}) where T
     solve!(M.fact, M.w_0)
     view(x, M.V_0) .= M.w_0
     Threads.@threads for sw in M.sws
-        x_view = view(x,sw.V)
+        x_view = view(x, sw.V)
         sw.w.= x_view
-        mul!(sw.w,sw.compl,M.w_0,1.,1.)
-        solve!(sw.M,sw.w)
+        mul!(sw.w, sw.compl, M.w_0, 1., 1.)
+        solve!(sw.M, sw.w)
         x_view.=sw.w
     end
     return x
@@ -223,4 +225,11 @@ function introduce(M::SchurLinearSolver)
     return "schur equipped with "*introduce(sw.M)
 end
 
+MadNLP.input_type(::Type{SchurLinearSolver}) = :csc
+
+MadNLP.default_options(::Type{SchurLinearSolver}) = SchurOptions()
+
+
+MadNLP.is_supported(::Type{SchurLinearSolver},::Type{Float32}) = true
+MadNLP.is_supported(::Type{SchurLinearSolver},::Type{Float64}) = true
 # end # module
