@@ -17,6 +17,8 @@ mutable struct BlockData
     nnz_hess::Int64
     all_columns::UnitRange{Int64}
     all_rows::UnitRange{Int64}
+    local_columns::UnitRange{Int64}
+    local_rows::UnitRange{Int64}
 
     # node and edge row and column indice
     node_data::OrderedDict{Node,UnitRange{Int64}}
@@ -28,6 +30,8 @@ mutable struct BlockData
             0,
             0,
             0,
+            UnitRange{Int64}(0,0),
+            UnitRange{Int64}(0,0),
             UnitRange{Int64}(0,0),
             UnitRange{Int64}(0,0),
             OrderedDict{Node,UnitRange{Int64}}(),
@@ -91,6 +95,7 @@ function _build_node_data!(
     end
     block_data.num_variables = count_columns
     block_data.node_data = node_columns
+    block_data.local_columns = offset_columns+1:offset_columns+count_columns
     
     # build sub-blocks
     offset_columns = offset_columns+count_columns
@@ -177,10 +182,7 @@ function _build_edge_data!(
         edge_data[edge] = EdgeData(columns, rows, nnzs_jac_inds, nnzs_hess_inds)
     end
     
-    # row_start = edge_data[block.edges[1]].row_indices[1]
-    # row_end = edge_data[block.edges[end]].row_indices[end]
-    # block_data.rows = row_start:row_end
-
+    block_data.local_rows = offset_rows+1:offset_rows+count_rows
     block_data.edge_data = edge_data
     block_data.num_constraints = count_rows
     block_data.nnz_jac = count_nnzj
@@ -328,6 +330,7 @@ function MOI.eval_objective_gradient(
     gradient::AbstractArray,
     x::AbstractArray
 )
+    gradient[:] .= 0.0
     eval_objective_gradient(evaluator.block, evaluator.block_data, gradient, x)
 end
 
@@ -337,7 +340,6 @@ function eval_objective_gradient(
     gradient::AbstractArray,
     x::AbstractArray
 )
-
     # IDEA: fill each edge gradient as a sparse vector, then sum together
     edge_gradients = [spzeros(length(gradient)) for _ = 1:length(block.edges)]
     Threads.@threads for i = 1:length(block.edges)
@@ -346,8 +348,7 @@ function eval_objective_gradient(
         columns = edge_data.column_indices
         MOI.eval_objective_gradient(edge, view(edge_gradients[i],columns), view(x,columns))
     end
-    # plus? or just assign?
-    gradient[:] .= sum(edge_gradients)
+    gradient[:] .+= sum(edge_gradients)
 
     # evaluate sub blocks
     Threads.@threads for i = 1:length(block.sub_blocks)
@@ -355,7 +356,7 @@ function eval_objective_gradient(
         sub_block_data = block_data.sub_block_data[sub_block.index]
         eval_objective_gradient(sub_block, sub_block_data, gradient, x)
     end
-    
+
     return
 end
 

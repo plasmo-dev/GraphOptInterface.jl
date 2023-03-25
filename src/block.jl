@@ -14,7 +14,7 @@ struct BlockIndex
 	value::Int64
 end
 
-# TODO
+# TODO: type-safe node index wrapper
 # struct NodeIndex
 # 	value::Int64
 # 	block_index::BlockIndex
@@ -367,7 +367,7 @@ function MOI.add_constraint(
 	return MOI.add_constraint(node.model, vi, set)
 end
 
-# forward methods so Node and Edge call their underlying model
+# forward methods so Node and Edge objects call their underlying MOI model
 @forward Node.model (MOI.get, MOI.set)
 @forward Edge.model (MOI.get, MOI.set, MOI.eval_objective, MOI.eval_objective_gradient,
 	MOI.eval_constraint, MOI.jacobian_structure, MOI.eval_constraint_jacobian,
@@ -380,7 +380,6 @@ function MOI.add_constraint(
 	func::F,
 	set::S
 ) where {F <: MOI.AbstractFunction, S <: MOI.AbstractSet}
-	
 	local_ci = MOI.add_constraint(edge.model, func, set)
 	block_index = MOI.get(optimizer.block, MOI.NumberOfConstraints{F,S}())
 	block_ci = MOI.ConstraintIndex{F,S}(block_index)

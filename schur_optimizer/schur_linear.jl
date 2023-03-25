@@ -1,29 +1,26 @@
 using SparseArrays
-
 using MadNLP
 
 import MadNLP: AbstractOptions, AbstractLinearSolver, MadNLPLogger, SubVector, 
 default_linear_solver, default_dense_solver, default_options, get_cscsy_view, get_csc_view,
-factorize!, solve!, mul!, intertia, is_inertia, introduce, improve!
+factorize!, solve!, mul!, inertia, is_inertia, introduce, improve!
 
-# LST => Linear Solver Type
-# DST => Dense Solver Type
-Base.@kwdef mutable struct SchurOptions{LST<:AbstractLinearSolver,DST<:AbstractLinearSolver} <: AbstractOptions
+Base.@kwdef mutable struct SchurOptions{S<:AbstractLinearSolver,D<:AbstractLinearSolver} <: AbstractOptions
     partition::Vector{Int}=Vector{Int}()
-    subproblem_solver::Type{LST}=default_linear_solver()
+    subproblem_solver::Type{S}=default_linear_solver()
     subproblem_solver_options::AbstractOptions=default_options(subproblem_solver)
-    dense_solver::Type{DST}=default_dense_solver()
+    dense_solver::Type{D}=default_dense_solver()
     dense_solver_options::AbstractOptions=default_options(dense_solver)
 end
 
-mutable struct SolverWorker{T,ST<:AbstractLinearSolver}
+mutable struct SolverWorker{T,S<:AbstractLinearSolver{T}}
     V::Vector{Int}
     V_0_nz::Vector{Int}
     csc::SparseMatrixCSC{T,Int32}
     csc_view::SubVector{T}
     compl::SparseMatrixCSC{T,Int32}
     compl_view::SubVector{T}
-    M::ST
+    linear_solver::S
     w::Vector{T}
 end
 function SolverWorker(
@@ -32,45 +29,49 @@ function SolverWorker(
     csc::SparseMatrixCSC{T},
     inds::Vector{Int},
     k::Int,
-    subproblem_solver::Type{ST},
+    subproblem_solver::Type{S},
     options::AbstractOptions,
     logger::MadNLPLogger
-) where T where ST <: AbstractLinearSolver
+) where T where S <: AbstractLinearSolver
 
-    # partition indices
+    # local partition indices
     V = findall(partition.==k)
 
-    # TODO: document what these are
+    # TODO: document these functions
     csc_k, csc_k_view = get_cscsy_view(csc, V, inds=inds)
     compl, compl_view = get_csc_view(csc, V, V_0, inds=inds)
     V_0_nz = findnz(compl.colptr)
 
     # sub-problem linear solver
-    lin_solver = subproblem_solver(csc_k; opt=options, logger=logger)
+    linear_solver = subproblem_solver(csc_k; opt=options, logger=logger)
     
     # sub-problem step
     w = Vector{T}(undef,csc_k.n)
 
-    return SolverWorker{T,ST}(V, V_0_nz, csc_k, csc_k_view, compl, compl_view, lin_solver, w)
+    return SolverWorker(V, V_0_nz, csc_k, csc_k_view, compl, compl_view, linear_solver, w)
 end
 
-mutable struct SchurLinearSolver{T} <: AbstractLinearSolver{T}
+mutable struct SchurLinearSolver{T,D<:AbstractLinearSolver{T}} <: AbstractLinearSolver{T}
     csc::SparseMatrixCSC{T,Int32}
     inds::Vector{Int}
+
+    # partition of primal-dual system
     partitions::Vector{Int}
     num_partitions::Int
 
+    # schur complement matrix
     schur::Matrix{T}
-    colors
-    fact # dense solver
+    colors::Vector{Vector{Int64}}
 
+    # first stage elements
+    dense_solver::D
     V_0::Vector{Int}
     csc_0::SparseMatrixCSC{T,Int32}
     csc_0_view::SubVector{T}
-    w_0::Vector{Float64}
-
+    w_0::Vector{T}
+    
+    # sub-problem workers
     sws::Vector{SolverWorker}
-
     opt::SchurOptions
     logger::MadNLPLogger
 end
@@ -93,7 +94,7 @@ function SchurLinearSolver(
     num_partitions = length(unique(opt.partition))-1 #do not count 0 as a partition
 
     # first stage indices
-    V_0   = findall(partition.==0)
+    V_0  = findall(opt.partition.==0)
     colors = get_colors(length(V_0), num_partitions)
 
     # KKT first-stage
@@ -104,11 +105,12 @@ function SchurLinearSolver(
     w_0 = Vector{Float64}(undef, length(V_0))
 
     # solver-workers
-    sws = Vector{SolverWorker{T,opt.subproblem_solver}}(undef, num_partitions)
+    # sws = Vector{SolverWorker{T,opt.subproblem_solver}}(undef, num_partitions)
+    sws = Vector{SolverWorker}(undef, num_partitions)
 
     Threads.@threads for k=1:num_partitions
         sws[k] = SolverWorker(
-            partition,
+            opt.partition,
             V_0,
             csc,
             inds,
@@ -120,16 +122,16 @@ function SchurLinearSolver(
     end
 
     # dense system solver
-    fact = opt.dense_solver(schur_matrix; opt=opt.dense_solver_options, logger=logger)
+    dense_solver = opt.dense_solver(schur_matrix; opt=opt.dense_solver_options, logger=logger)
 
-    return SchurLinearSolver{T}(
+    return SchurLinearSolver(
         csc, 
         inds,
         opt.partition,
         num_partitions,
         schur_matrix,
         colors,
-        fact,
+        dense_solver,
         V_0,
         csc_0,
         csc_0_view,
@@ -157,7 +159,7 @@ function factorize!(M::SchurLinearSolver)
     Threads.@threads for sw in M.sws
         sw.csc.nzval .= sw.csc_view
         sw.compl.nzval .= sw.compl_view
-        factorize!(sw.M)
+        factorize!(sw.linear_solver)
     end
 
     # NOTE: asynchronous multithreading doesn't work here
@@ -168,14 +170,14 @@ function factorize!(M::SchurLinearSolver)
             end
         end
     end
-    factorize!(M.fact)
+    factorize!(M.dense_solver)
     return M
 end
 
 function factorize_worker!(j, sw, schur)
     j in sw.V_0_nz || return
     sw.w.= view(sw.compl, :, j)
-    solve!(sw.M, sw.w)
+    solve!(sw.linear_solver, sw.w)
     mul!(view(schur, :, j), sw.compl', sw.w, -1., 1.)
 end
 
@@ -183,29 +185,29 @@ function solve!(M::SchurLinearSolver, x::AbstractVector{T}) where T
     M.w_0 .= view(x, M.V_0)
     Threads.@threads for sw in M.sws
         sw.w.=view(x, sw.V)
-        solve!(sw.M, sw.w)
+        solve!(sw.linear_solver, sw.w)
     end
     for sw in M.sws
         mul!(M.w_0, sw.compl', sw.w, -1., 1.)
     end
-    solve!(M.fact, M.w_0)
+    solve!(M.dense_solver, M.w_0)
     view(x, M.V_0) .= M.w_0
     Threads.@threads for sw in M.sws
         x_view = view(x, sw.V)
         sw.w.= x_view
         mul!(sw.w, sw.compl, M.w_0, 1., 1.)
-        solve!(sw.M, sw.w)
+        solve!(sw.linear_solver, sw.w)
         x_view.=sw.w
     end
     return x
 end
 
-is_inertia(M::SchurLinearSolver) = is_inertia(M.fact) && is_inertia(M.sws[1].M)
+is_inertia(M::SchurLinearSolver) = is_inertia(M.dense_solver) && is_inertia(M.sws[1].linear_solver)
 
 function inertia(M::SchurLinearSolver)
-    numpos,numzero,numneg = inertia(M.fact)
+    numpos,numzero,numneg = inertia(M.dense_solver)
     for k=1:M.opt.schur_num_parts
-        _numpos,_numzero,_numneg =  inertia(M.sws[k].M)
+        _numpos,_numzero,_numneg =  inertia(M.sws[k].linear_solver)
         numpos += _numpos
         numzero += _numzero
         numneg += _numneg
@@ -215,21 +217,18 @@ end
 
 function improve!(M::SchurLinearSolver)
     for sw in M.sws
-        improve!(sw.M) || return false
+        improve!(sw.linear_solver) || return false
     end
     return true
 end
 
 function introduce(M::SchurLinearSolver)
     sw = M.sws[1]
-    return "schur equipped with "*introduce(sw.M)
+    return "schur equipped with dense solver "*introduce(M.dense_solver)*" and sparse solver "*introduce(sw.linear_solver)
 end
 
 MadNLP.input_type(::Type{SchurLinearSolver}) = :csc
-
 MadNLP.default_options(::Type{SchurLinearSolver}) = SchurOptions()
-
-
 MadNLP.is_supported(::Type{SchurLinearSolver},::Type{Float32}) = true
 MadNLP.is_supported(::Type{SchurLinearSolver},::Type{Float64}) = true
 # end # module

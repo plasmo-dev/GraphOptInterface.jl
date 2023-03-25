@@ -1,9 +1,9 @@
 using Revise
 using Pkg
 Pkg.activate(@__DIR__())
-include("schur_optimizer.jl")
 
-using SparseArrays
+# schur_optimizer.jl will be migrated to MadNLP
+include(joinpath(@__DIR__(),"../schur_optimizer/schur_optimizer.jl"))
 
 optimizer = SchurOptimizer()
 block = MOI.get(optimizer, BOI.BlockStructure())

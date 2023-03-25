@@ -1,5 +1,6 @@
 include(joinpath(@__DIR__,"example_1_two_nodes.jl"))
 
+using MadNLP
 ##################################################
 # test nlp solves
 ##################################################
