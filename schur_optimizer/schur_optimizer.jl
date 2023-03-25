@@ -24,8 +24,8 @@ MOI.eval_hessian_lagrangian(::_EmptyNLPEvaluator, H, x, σ, μ) = nothing
 Create a new MadNLP Schur optimizer.
 """
 mutable struct SchurOptimizer <: BOI.AbstractBlockOptimizer
-    solver::Union{Nothing,MadNLPSolver}   #interior point solver
-    nlp::Union{Nothing,AbstractNLPModel}  #e.g. graph model
+    solver::Union{Nothing,MadNLPSolver} #interior-point solver
+    nlp::Union{Nothing,AbstractNLPModel}
     result::Union{Nothing,MadNLPExecutionStats{Float64}}
 
     name::String
@@ -36,6 +36,7 @@ mutable struct SchurOptimizer <: BOI.AbstractBlockOptimizer
     solve_iterations::Int
     sense::MOI.OptimizationSense
 
+    # all structure data is on a BOI.Block
     block::BOI.Block
 end
 
@@ -628,7 +629,6 @@ function _fill_constraint_info!(block, block_data, y0, c_lower, c_upper)
         g_L = copy(model.qp_data.g_L)
         g_U = copy(model.qp_data.g_U)
 
-        # BUG?: this might be  wrong. not correct indices
         for bound in model.nlp_data.constraint_bounds
             push!(g_L, bound.lower)
             push!(g_U, bound.upper)
@@ -660,22 +660,21 @@ function _fill_constraint_info!(block, block_data, y0, c_lower, c_upper)
     return
 end
 
+### MOI.optimize!
+
 function MOI.optimize!(optimizer::SchurOptimizer)
-    optimizer.nlp = BlockMOIModel(optimizer)
+    optimizer.nlp = BlockNLPModel(optimizer)
     if optimizer.silent
         optimizer.options[:print_level] = MadNLP.ERROR
     end
 
     # get block partitions from block structure
-    partition = get_partition_vector(optimizer)
-
-    # pass schur options
-    # schur_options = SchurOptions()
-
+    partition = get_partition_vector(optimizer.nlp)
     optimizer.solver = MadNLP.MadNLPSolver(
         optimizer.nlp;
         linear_solver=SchurLinearSolver,
-        partition=partition
+        partition=partition,
+        optimizer.options...
     )
     optimizer.result = solve!(optimizer.solver)
     optimizer.solve_time = optimizer.solver.cnt.total_time
@@ -685,13 +684,11 @@ end
 
 # SchurOptimizer supports up to two-level partition
 function get_partition_vector(nlp::BlockNLPModel)
-    # TODO: explain inequality constraint elements in partition vector
     if isempty(block.sub_blocks)
         partition = _get_one_level_partition(nlp)
     else
         partition = _get_two_level_partition(nlp)
     end
-
     return partition
 end
 
@@ -729,8 +726,8 @@ function _get_one_level_partition(nlp::BlockNLPModel)
     end
 
     # get inequality partitions
-    ineq_rows = rows[ind_ineq] 
-    partition = [columns; ineq_rows; rows]
+    slacks = rows[ind_ineq]
+    partition = [columns; slacks; rows]
 
     return partition
 end
@@ -746,21 +743,13 @@ function _get_two_level_partition(nlp::BlockNLPModel)
     columns = Vector{Int}(undef, num_var)
     rows = Vector{Int}(undef, num_con)
 
+    # all columns on root block are partition 0
     for node in block.nodes
         node_columns = block_data.node_data[node]
         columns[node_columns] .= 0
     end
 
-    # for edge in BOI.self_edges(block)
-    for edge in block.edges
-        edge_rows = block_data.edge_data[edge].row_indices
-        rows[edge_rows] .= 0
-    end
-
-    # block-connecting edges also are 0
-    # node-block edges are 0?
-
-    # we only support one level of hierarchy, so we assume sub-blocks are nodes
+    # we only support one level of hierarchy, so we assume sub-blocks are entire paritions
     for sub_block in block.sub_blocks
         sb_data = block_data.sub_block_data[sub_block.index]
         block_node_columns = sb_data.all_columns
@@ -769,7 +758,17 @@ function _get_two_level_partition(nlp::BlockNLPModel)
         rows[block_edge_columns] .= sub_block.index.value
     end
 
-    ineq_rows = rows[ind_ineq] 
-    partition = [columns; ineq_rows; rows]
+    # set linking rows and columns on children to root partition index
+    for edge in block.edges
+        # set child connection columns to 0. redundant, but catches everything.
+        edge_columns = block_data.edge_data[edge].column_indices
+        columns[edge_columns] .= 0
+
+        edge_rows = block_data.edge_data[edge].row_indices
+        rows[edge_rows] .= 0
+    end
+
+    slacks = rows[ind_ineq]
+    partition = [columns; slacks; rows]
     return partition
 end
