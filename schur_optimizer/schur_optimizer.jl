@@ -37,7 +37,7 @@ mutable struct SchurOptimizer <: BOI.AbstractBlockOptimizer
     sense::MOI.OptimizationSense
 
     # all structure data is on a BOI.Block
-    block::BOI.Block
+    block::BOI.RootBlock
 end
 
 function SchurOptimizer(; kwargs...)
@@ -56,7 +56,7 @@ function SchurOptimizer(; kwargs...)
         NaN,
         0,
         MOI.FEASIBILITY_SENSE,
-        BOI.Block(0)
+        BOI.RootBlock()
     )
 end
 

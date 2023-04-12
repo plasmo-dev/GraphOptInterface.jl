@@ -91,7 +91,6 @@ MOI.set(edge1, MOI.NLPBlock(), nlp_block1)
 sub_block2 = BOI.add_sub_block!(optimizer)
 node2 = BOI.add_node!(optimizer, sub_block2)
 
-# NOTE: returns optimizer index, not node index
 x2 = MOI.add_variables(optimizer, node2, 3)
 for x_i in x2
    MOI.add_constraint(optimizer, node2, x_i, MOI.GreaterThan(0.0))
@@ -125,11 +124,11 @@ MOI.set(edge2, MOI.NLPBlock(), nlp_block2)
 ##################################################
 # links between blocks
 ##################################################
-block = optimizer.block
+root_block = optimizer.block
 
 ### edge from node0 to sub-block1
 
-edge_0_1 = BOI.add_edge!(optimizer, BOI.BlockIndex(0), node0, node1)
+edge_0_1 = BOI.add_edge!(optimizer, root_block, node0, node1)
 xn_0 = BOI.add_coupling_variable!(edge_0_1, node0, node0[1])
 xn_1 = BOI.add_coupling_variable!(edge_0_1, node1, node1[1])
 
@@ -143,9 +142,9 @@ MOI.add_constraint(
 
 ### edge from node0 to sub-block2
 
-edge_0_2 = BOI.add_edge!(optimizer, BOI.BlockIndex(0), node0, node2)
-xn_0 = BOI.add_coupling_variable!(block, edge_0_2, node0, node0[1])
-xn_1 = BOI.add_coupling_variable!(block, edge_0_2, node2, node2[1])
+edge_0_2 = BOI.add_edge!(optimizer, root_block, node0, node2)
+xn_0 = BOI.add_coupling_variable!(edge_0_2, node0, node0[1])
+xn_1 = BOI.add_coupling_variable!(edge_0_2, node2, node2[1])
 
 MOI.add_constraint(
     optimizer,   
@@ -156,9 +155,9 @@ MOI.add_constraint(
 
 ### edge between sub-block1 and sub-block2
 
-edge_1_2 = BOI.add_edge!(optimizer, BOI.BlockIndex(0), (node1, node2))
-xn1 = BOI.add_coupling_variable!(block, edge_1_2, node1, node1[2])
-xn2 = BOI.add_coupling_variable!(block, edge_1_2, node2, node2[2])
+edge_1_2 = BOI.add_edge!(optimizer, root_block, node1, node2)
+xn1 = BOI.add_coupling_variable!(edge_1_2, node1, node1[2])
+xn2 = BOI.add_coupling_variable!(edge_1_2, node2, node2[2])
 
 MOI.add_constraint(
     optimizer,   
@@ -166,3 +165,15 @@ MOI.add_constraint(
     MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([1.0,-1.0], [xn1,xn2]), 0.0),
     MOI.EqualTo(0.0)
 )
+
+BOI.all_neighbors(optimizer, sub_block1)
+
+BOI.parent_neighbors(optimizer, sub_block1)
+
+BOI.neighbors(optimizer, sub_block1)
+
+BOI.all_incident_edges(optimizer, sub_block1)
+
+BOI.parent_incident_edges(optimizer, sub_block1)
+
+BOI.incident_edges(optimizer, sub_block1)

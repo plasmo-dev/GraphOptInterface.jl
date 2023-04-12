@@ -39,6 +39,10 @@ struct Node
 	model::NodeModelLike
 end
 
+function node_index(node::Node)
+	return node.index
+end
+
 function Base.getindex(node::Node, index::Int64)
 	@assert MOI.is_valid(node.model, MOI.VariableIndex(index))
 	return MOI.VariableIndex(index)
@@ -64,31 +68,6 @@ struct Edge{N}
 end
 
 ### Blocks
-
-struct RootBlock{T<:AbstractBlock} <: AbstractBlock
-	index::BlockIndex
-	nodes::Vector{Node}
-	edges::Vector{Edge}
-	sub_blocks::Vector{T}
-	node_by_index::OrderedDict{NodeIndex,Node}
-	edge_by_index::OrderedDict{EdgeIndex,Edge}
-	block_by_index::OrderedDict{BlockIndex,Block}
-	graph::HyperGraph # NOTE: vertices match node indices
-	function RootBlock()
-		block = new()
-		block.index = BlockIndex(0)
-		block.nodes = Vector{Node}()
-		block.edges = Vector{Edge}()
-		block.sub_blocks = Vector{Block}()
-		block.node_by_index = OrderedDict{NodeIndex,Node}()
-		block.edge_by_index = OrderedDict{EdgeIndex,Edge}()
-		block.block_by_index = OrderedDict{BlockIndex,Block}()
-		block.block_by_index[block.index] = block
-		block.graph = HyperGraph()
-		return block
-	end
-end
-
 mutable struct Block{T<:AbstractBlock} <: AbstractBlock
 	index::BlockIndex
 	parent_index::BlockIndex
@@ -99,7 +78,7 @@ mutable struct Block{T<:AbstractBlock} <: AbstractBlock
 	edge_by_index::OrderedDict{EdgeIndex,Edge}
 	block_by_index::OrderedDict{BlockIndex,Block}
 	function Block(parent_index::Int64, block_index::Int64)
-		block = new()
+		block = new{Block}()
 		block.index = BlockIndex(block_index)
 		block.parent_index = BlockIndex(parent_index)
 		block.nodes = Vector{Node}()
@@ -109,6 +88,30 @@ mutable struct Block{T<:AbstractBlock} <: AbstractBlock
 		block.edge_by_index = OrderedDict{EdgeIndex,Edge}()
 		block.block_by_index = OrderedDict{BlockIndex,Block}()
 		block.block_by_index[block.index] = block
+		return block
+	end
+end
+
+mutable struct RootBlock <: AbstractBlock
+	index::BlockIndex
+	nodes::Vector{Node}
+	edges::Vector{Edge}
+	sub_blocks::Vector{Block}
+	node_by_index::OrderedDict{NodeIndex,Node}
+	edge_by_index::OrderedDict{EdgeIndex,Edge}
+	block_by_index::OrderedDict{BlockIndex,Union{RootBlock,Block}}
+	graph::HyperGraph # NOTE: vertices match node indices
+	function RootBlock()
+		block = new()
+		block.index = BlockIndex(0)
+		block.nodes = Vector{Node}()
+		block.edges = Vector{Edge}()
+		block.sub_blocks = Vector{Block}()
+		block.node_by_index = OrderedDict{NodeIndex,Node}()
+		block.edge_by_index = OrderedDict{EdgeIndex,Edge}()
+		block.block_by_index = OrderedDict{BlockIndex,Union{RootBlock,Block}}()
+		block.block_by_index[block.index] = block
+		block.graph = HyperGraph()
 		return block
 	end
 end
@@ -138,57 +141,92 @@ function add_node!(optimizer::AbstractBlockOptimizer, block::T where T<:Abstract
 
 	# add vertex to the hypergraph
 	Graphs.add_vertex!(root.graph)
-	@assert Graphs.nv(root.graph) == node_idx.value
+
+	nverts = Graphs.nv(root.graph)
+	node_id = node_idx.value
+
+	@assert (Graphs.nv(root.graph) === node_idx.value)
 	return node
 end
 
 # add node to the root
-function add_node!(optimizer::AbstractBlockOptimizer)
+function add_node!(optimizer::AbstractBlockOptimizer)::Node
 	root = MOI.get(optimizer, BlockStructure())
 	return add_node!(optimizer, root)
 end
 
-function add_edge!(optimizer::AbstractBlockOptimizer, nodes::Node...)::Edge
+function add_edge!(optimizer::AbstractBlockOptimizer, node::Node)::Edge
 	root = MOI.get(optimizer, BlockStructure())
 	num_edges = Graphs.ne(root.graph)
 	
 	# get the corresponding block
 	block_index = node.block_index
-	block = root.block_by_index[block_index]
-	
+
 	# create the edge
 	edge_index = EdgeIndex(num_edges + 1)
 	model = edge_model(optimizer)
-	edge = Edge{NTuple{length(nodes),NodeIndex}}(
-		edge_index,
-		block_index,
-		(node.index,), 
-		edge_model(optimizer)
-	)
+	edge = _add_edge!(root, edge_index, block_index, (node.index,), model)
+	
+	return edge
+end
 
-	# add edge to block
-	push!(block.edges,edge)
-	block.edge_by_index[edge.index] = edge
-	root.edge_by_index[edge.index] = edge
+function add_edge!(optimizer::AbstractBlockOptimizer, block::T, nodes::Node...)::Edge where T <: AbstractBlock
+	root = MOI.get(optimizer, BlockStructure())
+	num_edges = Graphs.ne(root.graph)
+	
+	# check the edge is allowed on the corresponding block
+	# block = root.block_by_index[block_index]
+	@assert isempty(setdiff(nodes, get_nodes_one_layer(block)))
 
-	# update the graph
-	vertices = index_value.(nodes)
-	Graphs.add_edge!(root.graph, vertices)
+	node_indices = node_index.(nodes)
+	edge_index = EdgeIndex(num_edges + 1)
+	model = edge_model(optimizer)
+
+	edge = _add_edge!(root, edge_index, block.index, node_indices, model)
 
 	return edge
 end
 
-function add_sub_block!(optimizer::AbstractBlockOptimizer, parent::Block)::Block
+function _add_edge!(
+	root::RootBlock,
+	edge_index::EdgeIndex,
+	block_index::BlockIndex, 
+	node_indices::NTuple{N,NodeIndex} where N,
+	edge_model::EdgeModelLike
+)
+	edge = Edge{length(node_indices)}(
+		edge_index,
+		block_index,
+		node_indices, 
+		edge_model,
+		OrderedDict{MOI.VariableIndex,Tuple{NodeIndex,MOI.VariableIndex}}(),
+		OrderedDict{Tuple{NodeIndex,MOI.VariableIndex},MOI.VariableIndex}()
+	)
+
+	# add edge to block
+	block = root.block_by_index[block_index]
+	push!(block.edges,edge)
+
+	block.edge_by_index[edge.index] = edge
+	root.edge_by_index[edge.index] = edge
+
+	# update the graph
+	vertices = index_value.(node_indices)
+	Graphs.add_edge!(root.graph, vertices...)
+	return edge
+end
+
+function add_sub_block!(optimizer::AbstractBlockOptimizer, parent::T)::Block where T <: AbstractBlock
 	# get the root block
 	root = MOI.get(optimizer, BlockStructure())
 
 	# define a new block index, create the sub-block
 	new_block_index = length(root.block_by_index)
-	sub_block = Block(parent.index, new_block_index)
-	push!(block.sub_blocks, sub_block)
+	sub_block = Block(parent.index.value, new_block_index)
+	push!(parent.sub_blocks, sub_block)
 
 	# track new block index
-	block.block_by_index[sub_block.index] = sub_block
+	parent.block_by_index[sub_block.index] = sub_block
 	root.block_by_index[sub_block.index] = sub_block
 	return sub_block
 end
@@ -201,15 +239,25 @@ end
 
 ### Query Functions
 
-function get_nodes(block::Block)
+function get_nodes(block::T) where T <: AbstractBlock
+	nodes = block.nodes
 	return block.nodes
 end
 
-function get_edges(block::Block)
+function get_nodes_one_layer(block::T) where T <: AbstractBlock
+	nodes = block.nodes
+	for sub_block in block.sub_blocks
+		nodes = [nodes; sub_block.nodes]
+	end
+	return nodes
+end
+
+
+function get_edges(block::T) where T <: AbstractBlock
 	return block.edges
 end
 
-function all_nodes(block::Block)
+function all_nodes(block::T) where T <: AbstractBlock
 	nodes = block.nodes
 	for sub_block in block.sub_blocks
 		append!(nodes, all_nodes(sub_block))
@@ -217,21 +265,21 @@ function all_nodes(block::Block)
 	return nodes
 end
 
-# edges that connect to only one node
+# edges attached to one node
 function self_edges(block::Block)
 	return filter((edge) -> edge isa Edge{1}, block.edges)
 end
 
-# edges that link nodes
+# edges that connect nodes
 function linking_edges(block::Block)
-	return filter((edge) -> !(edge isa Edge{1), block.edges)
+	return filter((edge) -> !(edge isa Edge{1}), block.edges)
 end
 
 function connected_nodes(optimizer::AbstractBlockOptimizer, edge::Edge)
 	root = MOI.get(optimizer, MOI.BlockStructure())
 	graph = root.graph
 	vertices = edge.elements
-	return getindex.(Ref(optimizer.node_by_index), vertices)
+	return getindex.(Ref(root.node_by_index), vertices)
 end
 
 ### Neighbors
@@ -239,19 +287,19 @@ end
 # every neighbor including parent and child neighbors
 function all_neighbors(optimizer::AbstractBlockOptimizer, nodes::Vector{Node})::Vector{Node}
 	root = MOI.get(optimizer, BlockStructure())
-	node_indices = index_value.(nodes)
-	neighbor_indices = Graphs.all_neighbors(root.graph, node_indices)
-	return_indices = NodeIndex.(neighbor_indices)
-	return_nodes = getindex(Ref(root.node_by_index), return_indices)
+	vertices = index_value.(node_index.(nodes))
+	neighbor_vertices = Graphs.all_neighbors(root.graph, vertices...)
+	return_indices = NodeIndex.(neighbor_vertices)
+	return_nodes = getindex.(Ref(root.node_by_index), return_indices)
 	return return_nodes
 end
 
-function all_neighbors(optimizer::AbstractBlockOptimizer, block::Block)::Vector{Node}
+function all_neighbors(optimizer::AbstractBlockOptimizer, block::AbstractBlock)::Vector{Node}
 	return all_neighbors(optimizer, block.nodes)
 end
 
 # neighbors in parent block
-function parent_neighbors(optimizer::AbstractBlockOptimizer, block::Block)::Vector{Node}
+function parent_neighbors(optimizer::AbstractBlockOptimizer, block::AbstractBlock)::Vector{Node}
 	root = MOI.get(optimizer, BlockStructure())
 	parent_block = root.block_by_index[block.parent_index]
 	neighbors = all_neighbors(optimizer, block)
@@ -259,7 +307,7 @@ function parent_neighbors(optimizer::AbstractBlockOptimizer, block::Block)::Vect
 	return parent_nodes
 end
 
-function neighbors(optimizer::AbstractBlockOptimizer, block::Block)::Vector{Node}
+function neighbors(optimizer::AbstractBlockOptimizer, block::AbstractBlock)::Vector{Node}
 	root = MOI.get(optimizer, BlockStructure())
 	parent_block = root.block_by_index[block.parent_index]
 	neighbors = all_neighbors(optimizer, block)
@@ -270,9 +318,9 @@ end
 ### Incident Edges
 
 # all edges incident to a block
-function all_incident_edges(optimizer::AbstractBlockOptimizer, block::Block)::Vector{Edge}
+function all_incident_edges(optimizer::AbstractBlockOptimizer, block::AbstractBlock)::Vector{Edge}
 	root = MOI.get(optimizer, BlockStructure())
-	node_indices = index_value.(all_nodes(block))
+	node_indices = index_value.(node_index.((all_nodes(block))))
 	hyperedges = incident_edges(root.graph, node_indices)
 
 	# TODO: make cleaner hypergraph implementation
@@ -282,7 +330,7 @@ function all_incident_edges(optimizer::AbstractBlockOptimizer, block::Block)::Ve
 end
 
 # edges that connect this block to a parent block
-function parent_incident_edges(optimizer::AbstractBlockOptimizer, block::Block)::Vector{Edge}
+function parent_incident_edges(optimizer::AbstractBlockOptimizer, block::AbstractBlock)::Vector{Edge}
 	root = MOI.get(optimizer, BlockStructure())
 	parent_block = root.block_by_index[block.parent_index]
 	inc_edges = all_incident_edges(optimizer, block)
@@ -291,17 +339,17 @@ function parent_incident_edges(optimizer::AbstractBlockOptimizer, block::Block):
 end
 
 # edges that connect this block to other blocks
-function incident_edges(optimizer::AbstractBlockOptimizer, block::Block)::Vector{Edge}
+function incident_edges(optimizer::AbstractBlockOptimizer, block::AbstractBlock)::Vector{Edge}
 	root = MOI.get(optimizer, BlockStructure())
 	parent_block = root.block_by_index[block.parent_index]
 	inc_edges = all_incident_edges(optimizer, block)
-	external_edges = setdiff(inc_edges, parent_block.edges)
+	external_edges = filter((edge) -> any(node -> node in node_index.(parent_block.nodes), edge.elements), inc_edges)
 	return external_edges
 end
 
 # edges that connect this block to children blocks
 # TODO: we might just label these edges with direction for easy look-up
-function children_incident_edges(optimizer::AbstractBlockOptimizer, block::Block)::Vector{Edge}
+function children_incident_edges(optimizer::AbstractBlockOptimizer, block::AbstractBlock)::Vector{Edge}
 	children_edges = []
 	for sub_block in block.sub_blocks
 		append!(children_edges, parent_incident_edges(sub_block))
@@ -312,18 +360,18 @@ end
 ### Coupling Variables
 
 function add_coupling_variable!(edge::Edge, node::Node, vi::MOI.VariableIndex)::MOI.VariableIndex
-	@assert node in connected_nodes(edge)
-	if length(edge.elements) == 1
+	@assert node.index in edge.elements
+	if length(edge.elements) === 1
 		error("self-edges cannot have coupling variables")
 	end
 	# if edge variable already exists, return it
 	if (node.index,vi) in keys(edge.node_variable_map)
 		return edge.node_variable_map[(node.index,vi)]
 	else
-		num_edge_variables = length(edge.edge_variables)
+		num_edge_variables = length(edge.edge_variable_map)
 		edge_vi = MOI.VariableIndex(num_edge_variables + 1)
-		edge.node_variable_map[edge_vi] = (node.index,vi)
-		edge.edge_variable_map[(node.index,vi)] = edge_vi
+		edge.edge_variable_map[edge_vi] = (node.index,vi)
+		edge.node_variable_map[(node.index,vi)] = edge_vi
 		return edge_vi
 	end
 end
@@ -394,7 +442,7 @@ end
 
 ### Block attributes
 
-function MOI.get(block::Block, attr::MOI.ListOfConstraintTypesPresent)
+function MOI.get(block::T, attr::MOI.ListOfConstraintTypesPresent) where T <: AbstractBlock
 	ret = []
 	for node in get_nodes(block)
 		append!(ret, MOI.get(node.model, attr))
@@ -405,11 +453,11 @@ function MOI.get(block::Block, attr::MOI.ListOfConstraintTypesPresent)
     return unique(ret)
 end
 
-function MOI.get(block::Block, attr::MOI.NumberOfVariables)
+function MOI.get(block::T, attr::MOI.NumberOfVariables) where T <: AbstractBlock
     return sum(MOI.get(node, attr) for node in get_nodes(block))
 end
 
-function MOI.get(block::Block, attr::MOI.ListOfVariableIndices)
+function MOI.get(block::T, attr::MOI.ListOfVariableIndices) where T <: AbstractBlock
 	var_list = []
 	for node in get_nodes(block)
 		append!(var_list, MOI.get(node, attr))
@@ -418,22 +466,22 @@ function MOI.get(block::Block, attr::MOI.ListOfVariableIndices)
 end
 
 function MOI.get(
-    block::Block,
+    block::T,
     attr::MOI.NumberOfConstraints{F,S}
-) where {F <: MOI.AbstractFunction, S <: MOI.AbstractSet}
+) where {T <: AbstractBlock, F <: MOI.AbstractFunction, S <: MOI.AbstractSet}
 
     return sum(MOI.get(edge, attr) for edge in get_edges(block))
 end
 
-function Base.string(block::Block)
+function Base.string(block::AbstractBlock)
     return """Block
     $(length(block.nodes)) nodes
     $(length(block.edges)) edges
     $(length(block.sub_blocks)) sub-blocks
     """
 end
-Base.print(io::IO, block::Block) = print(io, string(block))
-Base.show(io::IO, block::Block) = print(io, block)
+Base.print(io::IO, block::AbstractBlock) = Base.print(io, Base.string(block))
+Base.show(io::IO, block::AbstractBlock) = Base.print(io, block)
 
 ### Utility funcs
 
