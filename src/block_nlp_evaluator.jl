@@ -286,7 +286,6 @@ Base.print(io::IO, evaluator::BlockEvaluator) = print(io, string(evaluator))
 Base.show(io::IO, evaluator::BlockEvaluator) = print(io, evaluator)
 
 
-
 function MOI.initialize(evaluator::BlockEvaluator, requested_features::Vector{Symbol})
     evaluator.block_data = build_block_data(evaluator.block, requested_features)
     return

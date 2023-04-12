@@ -4,6 +4,7 @@ using MathOptInterface
 using DataStructures
 using SparseArrays
 using Lazy
+using Graphs
 
 const MOI = MathOptInterface
 const MOIU = MOI.Utilities
@@ -27,6 +28,8 @@ end
 function supports_block_interface(::AbstractBlockOptimizer)
     return true
 end
+
+include("hypergraph.jl")
 
 include("block.jl")
 
