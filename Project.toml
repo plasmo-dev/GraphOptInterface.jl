@@ -1,4 +1,4 @@
-name = "BlockOptInterface"
+name = "GraphOptInterface"
 uuid = "2c3d953e-07eb-42f7-9900-e75950e41d88"
 authors = ["jalving <jhjalving@gmail.com>"]
 version = "0.1.0"

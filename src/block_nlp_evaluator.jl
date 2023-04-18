@@ -243,13 +243,9 @@ end
     )
 Create `Evaluator`, a subtype of `MOI.AbstractNLPEvaluator`, from `Model`.
 """
-mutable struct BlockEvaluator{B} <: MOI.AbstractNLPEvaluator
+mutable struct BlockEvaluator <: MOI.AbstractNLPEvaluator
     # The block containing nodes and edges
     block::Block
-    
-    # The abstract-differentiation backend
-    backend::B
-
     block_data::BlockData
     
     eval_objective_timer::Float64
@@ -258,16 +254,10 @@ mutable struct BlockEvaluator{B} <: MOI.AbstractNLPEvaluator
     eval_constraint_jacobian_timer::Float64
     eval_hessian_lagrangian_timer::Float64
 
-    function BlockEvaluator(
-        block::Block,
-        backend::B=MOI.Nonlinear.SparseReverseMode()
-    ) where {B<:MOI.Nonlinear.AbstractAutomaticDifferentiation}
-
+    function BlockEvaluator(block::Block)
         block_data = BlockData()
-
-        return new{B}(
+        return new(
             block,
-            backend,
             block_data,
             0.0,
             0.0,

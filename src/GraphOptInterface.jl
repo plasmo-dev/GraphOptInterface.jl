@@ -1,4 +1,4 @@
-module BlockOptInterface
+module GraphOptInterface
 
 using MathOptInterface
 using DataStructures
@@ -14,18 +14,18 @@ const MOIB = MOI.Bridges
     AbstractBlockOptimizer
 Abstract supertype for block-structure-exploiting optimizers.
 """
-abstract type AbstractBlockOptimizer <: MOI.AbstractOptimizer end
+abstract type AbstractGraphOptimizer <: MOI.AbstractOptimizer end
 
-abstract type AbstractBlockAttribute <: MOI.AbstractModelAttribute end
+abstract type AbstractGraphAttribute <: MOI.AbstractModelAttribute end
 
-struct BlockStructure <: AbstractBlockAttribute end
+struct GraphInterface <: AbstractBlockAttribute end
 
 # Block optimizer interface
-function supports_block_interface(::MOI.AbstractOptimizer)
+function supports_graph_interface(::MOI.AbstractOptimizer)
     return false
 end
 
-function supports_block_interface(::AbstractBlockOptimizer)
+function supports_graph_interface(::AbstractBlockOptimizer)
     return true
 end
 
