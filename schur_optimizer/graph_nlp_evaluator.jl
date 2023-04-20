@@ -1,7 +1,4 @@
-# struct NodeData
-#     node_columns::UnitRange
-#     node_block_index::Int
-# end
+# TODO: Associate QPData + NLPData with each edge
 
 struct EdgeData
     column_indices::Union{UnitRange{Int64},Vector{Int64}}
@@ -83,9 +80,6 @@ function _build_node_data!(
     # count up variables
     count_columns = 0
     offset_start = offset_columns
-
-    # TODO: NodeIndex
-    # node_columns = Dict{NodeIndex,UnitRange}()
 
     node_columns = OrderedDict{Node,UnitRange}()
     for node in block.nodes
@@ -219,17 +213,18 @@ function _build_edge_data!(
 end
 
 function build_block_data(
-    block::Block, 
+    #block::Block,
+    graph::GOI.Graph, 
     requested_features::Vector{Symbol}
 )
     
     block_data = BlockData()
 
-    _add_sublock_data!(block, block_data)
+    _add_sublock_data!(graph, block_data)
 
-    _build_node_data!(block, block_data)
+    _build_node_data!(graph, block_data)
 
-    _build_edge_data!(block, block_data, requested_features)
+    _build_edge_data!(graph, block_data, requested_features)
 
     block_data.all_columns = 1:block_data.num_variables
     block_data.all_rows = 1:block_data.num_constraints
@@ -238,12 +233,12 @@ function build_block_data(
 end
 
 """
-    BlockEvaluator(
+    GraphNLPEvaluator(
         block::Block
     )
 Create `Evaluator`, a subtype of `MOI.AbstractNLPEvaluator`, from `Model`.
 """
-mutable struct BlockEvaluator <: MOI.AbstractNLPEvaluator
+mutable struct GraphNLPEvaluator <: MOI.AbstractNLPEvaluator
     # The block containing nodes and edges
     block::Block
     block_data::BlockData
@@ -254,7 +249,7 @@ mutable struct BlockEvaluator <: MOI.AbstractNLPEvaluator
     eval_constraint_jacobian_timer::Float64
     eval_hessian_lagrangian_timer::Float64
 
-    function BlockEvaluator(block::Block)
+    function GraphNLPEvaluator(block::Block)
         block_data = BlockData()
         return new(
             block,
@@ -268,22 +263,24 @@ mutable struct BlockEvaluator <: MOI.AbstractNLPEvaluator
     end
 end
 
-function Base.string(evaluator::BlockEvaluator)
+function Base.string(evaluator::GraphNLPEvaluator)
     return """Block NLP Evaluator
     """
 end
-Base.print(io::IO, evaluator::BlockEvaluator) = print(io, string(evaluator))
-Base.show(io::IO, evaluator::BlockEvaluator) = print(io, evaluator)
+Base.print(io::IO, evaluator::GraphNLPEvaluator) = print(io, string(evaluator))
+Base.show(io::IO, evaluator::GraphNLPEvaluator) = print(io, evaluator)
 
 
-function MOI.initialize(evaluator::BlockEvaluator, requested_features::Vector{Symbol})
+function MOI.initialize(evaluator::GraphNLPEvaluator, requested_features::Vector{Symbol})
+    # create local evaluators. QPBlockData and NLPBlockData
+
     evaluator.block_data = build_block_data(evaluator.block, requested_features)
     return
 end
 
 ### Eval_F_CB
 
-function MOI.eval_objective(evaluator::BlockEvaluator, x::AbstractArray)
+function MOI.eval_objective(evaluator::GraphNLPEvaluator, x::AbstractArray)
     return eval_objective(evaluator.block, evaluator.block_data, x)
 end
 
@@ -315,7 +312,7 @@ end
 ### Eval_Grad_F_CB
 
 function MOI.eval_objective_gradient(
-    evaluator::BlockEvaluator,
+    evaluator::GraphNLPEvaluator,
     gradient::AbstractArray,
     x::AbstractArray
 )
@@ -352,7 +349,7 @@ end
 ### Eval_G_CB
 
 function MOI.eval_constraint(
-    evaluator::BlockEvaluator,
+    evaluator::GraphNLPEvaluator,
     c::AbstractArray,
     x::AbstractArray
 )
@@ -385,7 +382,7 @@ end
 
 ### Eval_Jac_G_CB
 
-function MOI.jacobian_structure(evaluator::BlockEvaluator)::Vector{Tuple{Int64,Int64}}
+function MOI.jacobian_structure(evaluator::GraphNLPEvaluator)::Vector{Tuple{Int64,Int64}}
 
     I = Vector{Int64}(undef, evaluator.block_data.nnz_jac) # row indices
     J = Vector{Int64}(undef, evaluator.block_data.nnz_jac) # column indices
@@ -433,7 +430,7 @@ function jacobian_structure(
 end
 
 function MOI.eval_constraint_jacobian(
-    evaluator::BlockEvaluator,
+    evaluator::GraphNLPEvaluator,
     jac_values::AbstractArray,
     x::AbstractArray
 )
@@ -469,7 +466,7 @@ end
 ### Eval_H_CB
 
 function MOI.hessian_lagrangian_structure(
-    evaluator::BlockEvaluator
+    evaluator::GraphNLPEvaluator
 )::Vector{Tuple{Int64,Int64}}
 
     block = evaluator.block
@@ -517,7 +514,7 @@ function hessian_lagrangian_structure(
 end
 
 function MOI.eval_hessian_lagrangian(
-    evaluator::BlockEvaluator, 
+    evaluator::GraphNLPEvaluator, 
     hess_values::AbstractArray,
     x::AbstractArray,
     sigma::Float64,

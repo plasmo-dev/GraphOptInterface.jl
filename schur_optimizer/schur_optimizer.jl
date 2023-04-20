@@ -24,8 +24,8 @@ MOI.eval_hessian_lagrangian(::_EmptyNLPEvaluator, H, x, σ, μ) = nothing
 Create a new MadNLP Schur optimizer.
 """
 mutable struct SchurOptimizer <: GOI.AbstractGraphOptimizer
-    solver::Union{Nothing,MadNLPSolver}     # interior-point solver
-    nlp::Union{Nothing,AbstractNLPModel}    # TODO: GraphNLPModel
+    solver::Union{Nothing,MadNLPSolver}
+    nlp::Union{Nothing,AbstractNLPModel}    # TODO: GraphNLPModels
     result::Union{Nothing,MadNLPExecutionStats{Float64}}
 
     name::String
@@ -37,7 +37,8 @@ mutable struct SchurOptimizer <: GOI.AbstractGraphOptimizer
     sense::MOI.OptimizationSense
 
     # all structure data is on a GOI.Graph
-    graph::GOI.OptiGraph
+    graph::GOI.GraphModel
+    block_data::BlockData
 end
 
 function SchurOptimizer(; kwargs...)
@@ -147,7 +148,7 @@ function MOI.get(model::SchurOptimizer, p::MOI.RawOptimizerAttribute)
     return model.options[p.name]
 end
 
-# Constraints
+### Constraints
 
 function MOI.supports_constraint(
     ::SchurOptimizer,
@@ -169,7 +170,18 @@ function MOI.set(optimizer::SchurOptimizer, ::GOI.GraphNLPBlock, nlp_data::GOI.G
     return
 end
 
+
+# TODO: associate edge model with each graph edge
+struct EdgeModel
+    qp_data::QPBlockData
+    nlp_data::NLPBlockData
+end
+
 ### Eval_F_CB
+
+function MOI.eval_objective(optimizer::SchurOptimizer, x::AbstractArray{T}) where T
+    return GOI.eval_objective(optimizer.nlp_data.block_evaluator, x)
+end
 
 function MOI.eval_objective(edge::EdgeModel, x::AbstractArray{T}) where T
     if edge.sense == MOI.FEASIBILITY_SENSE
@@ -243,7 +255,7 @@ end
 struct BlockNLPModel{T} <: AbstractNLPModel{T,Vector{T}}
     meta::NLPModelMeta{T, Vector{T}}
     optimizer::SchurOptimizer
-    evaluator::GOI.GraphNLPEvaluator#BlockEvaluator
+    evaluator::GOI.GraphNLPEvaluator #AbstractEvaluator
     counters::NLPModels.Counters
 end
 

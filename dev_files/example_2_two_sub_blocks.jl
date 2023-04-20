@@ -2,20 +2,21 @@ using Revise
 using Pkg
 Pkg.activate(@__DIR__())
 
-# schur_optimizer.jl will be migrated to MadNLP
-include(joinpath(@__DIR__(),"../schur_optimizer/schur_optimizer.jl"))
+using GraphOptInterface
+const GOI = GraphOptInterface
 
-optimizer = SchurOptimizer()
+# schur_optimizer.jl will be migrated to MadNLP
+# include(joinpath(@__DIR__(),"../schur_optimizer/schur_optimizer.jl"))
+#optimizer = SchurOptimizer()
 
 ##################################################
 # block 0: node 0 and edge 0
 ##################################################
-# block = GOI.add_block(optimizer, HiGHS.Optimizer())
 graph = GOI.get(optimizer, GOI.Graph())
 node0 = GOI.add_node(graph)
 x0 = GOI.add_variables(node0, 3)
 
-# constraints/bounds on variables
+# constraints on variables
 for x_i in x0
    MOI.add_constraint(node0, x_i, MOI.GreaterThan(0.0))
 end
@@ -31,7 +32,7 @@ MOI.set(
 	MOI.ObjectiveFunction{MOI.ScalarAffineFunction{Float64}}(),
 	MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.(c0, x0), 0.0)
 )
-MOI.set(optimizer, edge0, MOI.ObjectiveSense(), MOI.MAX_SENSE)
+MOI.set(edge0, MOI.ObjectiveSense(), MOI.MAX_SENSE)
 
 ci = MOI.add_constraint(
     edge0,
@@ -53,9 +54,9 @@ MOI.Nonlinear.add_constraint(edge0, :(1 + sqrt($(x0[1]))), MOI.LessThan(2.0))
 sub_block1 = GOI.add_sub_block(graph)
 node1 = GOI.add_node(graph, sub_block1)
 
-x1 = MOI.add_variables(optimizer, node1, 3)
+x1 = MOI.add_variables(node1, 3)
 for x_i in x1
-   MOI.add_constraint(optimizer, node1, x_i, MOI.GreaterThan(0.0))
+   MOI.add_constraint(node, x_i, MOI.GreaterThan(0.0))
 end
 
 c1 = [2.0, 3.0, 4.0]
@@ -90,7 +91,7 @@ MOI.Nonlinear.add_constraint(edge1, :(1 + sqrt($(x1[2]))), MOI.LessThan(3.0))
 sub_block2 = GOI.add_sub_block(graph)
 node2 = GOI.add_node(graph, sub_block2)
 
-x2 = MOI.add_variables(node2, 3)
+x2 = MOI.add_variables(graph, node2, 3)
 for x_i in x2
    MOI.add_constraint(node2, x_i, MOI.GreaterThan(0.0))
 end
@@ -112,9 +113,10 @@ MOI.add_constraint(
     MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.(w2, x2), 0.0),
     MOI.LessThan(C2)
 )
+MOI.Nonlinear.add_constraint(edge2, :(1 + sqrt($(x2[2]))), MOI.LessThan(3.0))
 
 #nlp2 = MOI.Nonlinear.Model()
-MOI.Nonlinear.add_constraint(edge2, :(1 + sqrt($(x2[2]))), MOI.LessThan(3.0))
+
 # evaluator2 = MOI.Nonlinear.Evaluator(nlp2, MOI.Nonlinear.SparseReverseMode(), x2)
 # nlp_block2 = MOI.NLPBlockData(evaluator2)
 # MOI.set(optimizer, node2, MOI.NLPBlock(), nlp_block2)
@@ -125,41 +127,39 @@ MOI.Nonlinear.add_constraint(edge2, :(1 + sqrt($(x2[2]))), MOI.LessThan(3.0))
 
 ### edge from node0 to sub-block1
 edge_0_1 = GOI.add_edge(graph, node0, node1)
-xn_0 = GOI.add_coupling_variable(graph, edge_0_1, node0, MOI.VariableIndex(1))
-xn_1 = GOI.add_coupling_variable(graph, edge_0_1, node1, MOI.VariableIndex(1))
+x0 = MOI.add_variable(edge_0_1, node0, MOI.VariableIndex(1))
+x1 = MOI.add_variable(edge_0_1, node1, MOI.VariableIndex(1))
 
-# uses the defined coupling variables
-MOI.add_constraint(   
+MOI.add_constraint(
     edge_0_1,
-    MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([1.0,-1.0], [xn_0,xn_1]), 0.0),
+    MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([1.0,-1.0], [x0,x1]), 0.0),
     MOI.EqualTo(0.0)
 )
 
 ### edge from node0 to node2
 
 edge_0_2 = GOI.add_edge(graph, node0, node2)
-xn_0 = GOI.add_coupling_variable(graph, edge_0_2, node0, MOI.VariableIndex(1))
-xn_1 = GOI.add_coupling_variable(graph, edge_0_2, node2, MOI.VariableIndex(1))
-
+x0 = MOI.add_variable(edge, node0, MOI.VariableIndex(1))
+x1 = MOI.add_variable(edge, node2, MOI.VariableIndex(1))
 MOI.add_constraint( 
     edge_0_2,
-    MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([1.0,-1.0], [xn_0,xn_1]), 0.0),
+    MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([1.0,-1.0], [x0,xn_1]), 0.0),
     MOI.EqualTo(0.0)
 )
 
 ### edge between sub-block1 and sub-block2
 
 edge_1_2 = GOI.add_edge(graph, node1, node2)
-xn1 = GOI.add_coupling_variable(edge_1_2, node1, MOI.VariableIndex(2))
-xn2 = GOI.add_coupling_variable(edge_1_2, node2, MOI.VariableIndex(2))
+x1 = MOI.add_variable(edge_1_2, node1, MOI.VariableIndex(2))
+x2 = MOI.add_variable(edge_1_2, node2, MOI.VariableIndex(2))
 
 MOI.add_constraint(
     edge_1_2,
-    MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([1.0,-1.0], [xn1,xn2]), 0.0),
+    MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([1.0,-1.0], [x1,x2]), 0.0),
     MOI.EqualTo(0.0)
 )
 
-# GOI.all_neighbors(optimizer, sub_block1)
+# GOI.all_neighbors(graph, sub_block1)
 
 # GOI.parent_neighbors(optimizer, sub_block1)
 
