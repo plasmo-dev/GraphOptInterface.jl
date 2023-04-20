@@ -18,21 +18,23 @@ abstract type AbstractGraphOptimizer <: MOI.AbstractOptimizer end
 
 abstract type AbstractGraphAttribute <: MOI.AbstractModelAttribute end
 
-struct GraphInterface <: AbstractBlockAttribute end
+struct Graph <: AbstractGraphAttribute end
 
 # Block optimizer interface
 function supports_graph_interface(::MOI.AbstractOptimizer)
     return false
 end
 
-function supports_graph_interface(::AbstractBlockOptimizer)
+function supports_graph_interface(::AbstractGraphOptimizer)
     return true
 end
 
 include("hypergraph.jl")
 
-include("block.jl")
+include("graph.jl")
 
-include("block_nlp_evaluator.jl")
+include("graph_functions")
+
+include("graph_nlp_evaluator.jl")
 
 end 

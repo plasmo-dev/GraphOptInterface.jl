@@ -1,6 +1,4 @@
 abstract type AbstractBlock end
-abstract type NodeModelLike <: MOI.ModelLike end
-abstract type EdgeModelLike <: MOI.ModelLike end
 
 ### BlockIndex
 
@@ -12,65 +10,23 @@ function raw_index(index::BlockIndex)
 	return index.value
 end
 
-### Node and Edge Definitions
-
-struct Node <: NodeModelLike
-	index::HyperNode
-	block_index::BlockIndex
-	variables::MOIU.VariablesContainer
-	var_attr::Dict{MOI.AbstractVariableAttribute,Dict{MOI.VariableIndex, Any}}
-end
-
-function node_index(node::Node)::HyperNode
-	return node.index
-end
-
-"""
-	Edge
-
-An edge represents different types of coupling. For instance an Edge{Tuple{Node}} is an edge
-the couple variables within a single node. An Edge{Tuple{N,Node}} couple variables across
-one or more nodes.
-"""
-mutable struct Edge{N} <: EdgeModelLike
-	index::HyperEdge
-	block_index::BlockIndex
-	moi_model::MOIU.UniversalFallback{MOIU.Model{Float64}}
-	nonlinear_model::Union{Nothing,MOI.Nonlinear.Model}
-end
-function Edge(hyperedge::HyperEdge, block_index::BlockIndex)
-	# if Graphs.nv(hyperedge) > 1
-	# 	variable_map = OrderedDict{MOI.VariableIndex,Tuple{HyperNode,MOI.VariableIndex}}()
-	# else
-	# 	variable_map = nothing
-	# end
-	moi_model = MOIU.UniversalFallback{MOIU.Model{Float64}}()
-	return Edge{length(hyperedge.vertices)}(index, block_index, variable_map, moi_model, nothing)
-end
-
-function edge_index(edge::Edge)::HyperEdge
-	return edge.index
-end
-
-struct OptiGraph
-	hypergraph::HyperGraph
-	block::Block
-end
-function OptiGraph()
-	return OptiGraph(Block(0), HyperGraph())
+function Base.getindex(node::Node, index::Int64)
+	@assert MOI.is_valid(node.model, MOI.VariableIndex(index))
+	return MOI.VariableIndex(index)
 end
 
 ### Blocks
-# a block contains nodes, edges, and sub-blocks
 
+# a block contains nodes, edges, and sub-blocks
 mutable struct Block{T<:AbstractBlock} <: AbstractBlock
 	index::BlockIndex
 	parent_index::Union{Nothing,BlockIndex}
-	nodes::Vector{Node}
-	edges::Vector{Edge}
+	nodes::Vector{HyperNode}
+	edges::Vector{HyperEdge}
 	sub_blocks::Vector{T}
+
+	# store lookups for all sub-blocks
 	block_by_index::OrderedDict{BlockIndex,Block}
-	edge_variable_map::OrderedDict{Tuple{HyperEdge,MOI.VariableIndex},Tuple{HyperNode,MOI.VariableIndex}}}
 	function Block(block_index::Int64)
 		block = new{Block}()
 		block.index = BlockIndex(block_index)
@@ -82,22 +38,47 @@ mutable struct Block{T<:AbstractBlock} <: AbstractBlock
 	end
 end
 
+# # the node each variable belongs to
+struct NodeIndex <: MOI.AbstractVariableAttribute end
+
+struct EdgeIndex <: MOI.AbstractConstraintAttribute end
+
+struct OptiGraph <: MOI.ModelLike
+	hypergraph::HyperGraph
+	moi_model::MOIU.UniversalFallback{MOIU.Model{Float64}}
+	nonlinear_model::Union{Nothing,MOI.Nonlinear.Model}
+	block::Block
+end
+function OptiGraph()
+	return OptiGraph(
+		HyperGraph(),
+		MOIU.UniversalFallback{MOIU.Model{Float64}}(),
+		nothing,
+		Block(0)
+	)
+end
 
 ### Add nodes and edges
 
 """
-	add_node!(optimizer::AbstractBlockOptimizer, block::T where T<:AbstractBlock)::Node
+	add_node!(graph::OptiGraph, block::T where T<:AbstractBlock)::Node
 
 Add a node to `block` on `optimizer`. The index of the node is determined by the root block.
 
-	add_node!(optimizer::AbstractBlockOptimizer)
+	add_node!(graph::OptiGraph)
 
 Add a node to `optimizer` root block.
 """
+function add_node(graph::OptiGraph, block::T where T<:AbstractBlock)::NodeModel
+	hypernode = Graphs.add_vertex!(graph.hypergraph)
+	# create model and node
+	push!(block.nodes, hypernode)
+	return node
+end
+
 function add_node(graph::OptiGraph, block::Block)::Node
 	hypernode = Graphs.add_vertex!(graph.hypergraph)
-	node = Node(hypernode)
-	push!(block.nodes, node)
+	push!(block.nodes, hypernode)
 	return node
 end
 
@@ -105,23 +86,16 @@ function add_node(graph::OptiGraph)::Node
 	return add_node!(graph.block)
 end
 
-function add_edge(graph::OptiGraph, block::Block, nodes::NTuple{N,Node})::Edge
-	# nodes 
+function add_edge(graph::OptiGraph, block::Block, hypernodes::NTuple{N,HyperNode})::Edge
 	@assert isempty(setdiff(nodes, get_nodes_one_layer(block)))
-	hypernodes = node_index.(nodes)
 	hyperedge = add_edge!(graph.hypergraph, hypernodes)
-	edge = Edge(hyperedge, block_index)
-	push!(block.edges,edge)
+	push!(block.edges, hyperedge)
 	return edge
 end
 
-function add_edge(graph::OptiGraph, node::Node)
-	return add_edge(graph, graph.block, (node,))
-end
-
-function add_sub_block(graph::OptiGraph, parent::Block)::Block
+function add_sub_block!(graph::OptiGraph, parent::T)::Block where T <: AbstractBlock
 	# get the root block
-	root = graph.block
+	root = MOI.get(optimizer, BlockStructure())
 
 	# define a new block index, create the sub-block
 	new_block_index = length(root.block_by_index)
@@ -135,20 +109,19 @@ function add_sub_block(graph::OptiGraph, parent::Block)::Block
 end
 
 function add_sub_block!(graph::OptiGraph)::Block
-	root = graph.block
-	block = add_sub_block!(graph, root)
+	root = MOI.get(optimizer, BlockStructure())
+	block = add_sub_block!(optimizer, root)
 	return block
 end
 
-
 ### Query Functions
 
-function get_nodes(block::Block)
+function get_nodes(block::T) where T <: AbstractBlock
 	nodes = block.nodes
 	return block.nodes
 end
 
-function get_nodes_one_layer(block::Block)
+function get_nodes_one_layer(block::T) where T <: AbstractBlock
 	nodes = block.nodes
 	for sub_block in block.sub_blocks
 		nodes = [nodes; sub_block.nodes]
@@ -171,7 +144,7 @@ end
 
 # edges attached to one node
 function self_edges(block::Block)
-	return filter((edge) -> edge isa Edge{1}, block.edges)
+	return filter((edge) -> length(edge) == 1, block.edges)
 end
 
 # edges that connect nodes
@@ -179,7 +152,7 @@ function linking_edges(block::Block)
 	return filter((edge) -> !(edge isa Edge{1}), block.edges)
 end
 
-function connected_nodes(optimizer::AbstractBlockOptimizer, edge::Edge)
+function connected_nodes(graph::OptiGraph, edge::Edge)
 	root = MOI.get(optimizer, MOI.BlockStructure())
 	graph = root.graph
 	vertices = edge.elements
@@ -189,7 +162,7 @@ end
 ### Neighbors
 
 # every neighbor including parent and child neighbors
-function all_neighbors(optimizer::AbstractBlockOptimizer, nodes::Vector{Node})::Vector{Node}
+function all_neighbors(graph::OptiGraph, nodes::Vector{Node})::Vector{Node}
 	root = MOI.get(optimizer, BlockStructure())
 	vertices = index_value.(node_index.(nodes))
 	neighbor_vertices = Graphs.all_neighbors(root.graph, vertices...)
@@ -198,12 +171,12 @@ function all_neighbors(optimizer::AbstractBlockOptimizer, nodes::Vector{Node})::
 	return return_nodes
 end
 
-function all_neighbors(optimizer::AbstractBlockOptimizer, block::AbstractBlock)::Vector{Node}
+function all_neighbors(graph::OptiGraph, block::AbstractBlock)::Vector{Node}
 	return all_neighbors(optimizer, block.nodes)
 end
 
 # neighbors in parent block
-function parent_neighbors(optimizer::AbstractBlockOptimizer, block::AbstractBlock)::Vector{Node}
+function parent_neighbors(graph::OptiGraph, block::AbstractBlock)::Vector{Node}
 	root = MOI.get(optimizer, BlockStructure())
 	parent_block = root.block_by_index[block.parent_index]
 	neighbors = all_neighbors(optimizer, block)
@@ -211,7 +184,7 @@ function parent_neighbors(optimizer::AbstractBlockOptimizer, block::AbstractBloc
 	return parent_nodes
 end
 
-function neighbors(optimizer::AbstractBlockOptimizer, block::AbstractBlock)::Vector{Node}
+function neighbors(graph::OptiGraph, block::AbstractBlock)::Vector{Node}
 	root = MOI.get(optimizer, BlockStructure())
 	parent_block = root.block_by_index[block.parent_index]
 	neighbors = all_neighbors(optimizer, block)
@@ -222,7 +195,7 @@ end
 ### Incident Edges
 
 # all edges incident to a block
-function all_incident_edges(optimizer::AbstractBlockOptimizer, block::AbstractBlock)::Vector{Edge}
+function all_incident_edges(graph::OptiGraph, block::AbstractBlock)::Vector{Edge}
 	root = MOI.get(optimizer, BlockStructure())
 	node_indices = index_value.(node_index.((all_nodes(block))))
 	hyperedges = incident_edges(root.graph, node_indices)
@@ -234,7 +207,7 @@ function all_incident_edges(optimizer::AbstractBlockOptimizer, block::AbstractBl
 end
 
 # edges that connect this block to a parent block
-function parent_incident_edges(optimizer::AbstractBlockOptimizer, block::AbstractBlock)::Vector{Edge}
+function parent_incident_edges(graph::OptiGraph, block::AbstractBlock)::Vector{Edge}
 	root = MOI.get(optimizer, BlockStructure())
 	parent_block = root.block_by_index[block.parent_index]
 	inc_edges = all_incident_edges(optimizer, block)
@@ -243,7 +216,7 @@ function parent_incident_edges(optimizer::AbstractBlockOptimizer, block::Abstrac
 end
 
 # edges that connect this block to other blocks
-function incident_edges(optimizer::AbstractBlockOptimizer, block::AbstractBlock)::Vector{Edge}
+function incident_edges(graph::OptiGraph, block::AbstractBlock)::Vector{Edge}
 	root = MOI.get(optimizer, BlockStructure())
 	parent_block = root.block_by_index[block.parent_index]
 	inc_edges = all_incident_edges(optimizer, block)
@@ -253,7 +226,7 @@ end
 
 # edges that connect this block to children blocks
 # TODO: we might just label these edges with direction for easy look-up
-function children_incident_edges(optimizer::AbstractBlockOptimizer, block::AbstractBlock)::Vector{Edge}
+function children_incident_edges(graph::OptiGraph, block::AbstractBlock)::Vector{Edge}
 	children_edges = []
 	for sub_block in block.sub_blocks
 		append!(children_edges, parent_incident_edges(sub_block))
@@ -263,102 +236,71 @@ end
 
 ### Coupling Variables
 
-function add_coupling_variable(edge::Edge, node::Node, vi::MOI.VariableIndex)::MOI.VariableIndex
-	@assert node.index in edge.elements
-	if length(edge.elements) === 1
-		error("self-edges cannot have coupling variables")
-	end
-	# if edge variable already exists, return it
-	if (node.index,vi) in keys(edge.node_variable_map)
-		return edge.node_variable_map[(node.index,vi)]
-	else
-		num_edge_variables = length(edge.edge_variable_map)
-		edge_vi = MOI.VariableIndex(num_edge_variables + 1)
-		edge.edge_variable_map[edge_vi] = (node.index,vi)
-		edge.node_variable_map[(node.index,vi)] = edge_vi
-		return edge_vi
-	end
-end
+# function add_coupling_variable!(edge::Edge, node::Node, vi::MOI.VariableIndex)::MOI.VariableIndex
+# 	@assert node.index in edge.elements
+# 	if length(edge.elements) === 1
+# 		error("self-edges cannot have coupling variables")
+# 	end
+# 	# if edge variable already exists, return it
+# 	if (node.index,vi) in keys(edge.node_variable_map)
+# 		return edge.node_variable_map[(node.index,vi)]
+# 	else
+# 		num_edge_variables = length(edge.edge_variable_map)
+# 		edge_vi = MOI.VariableIndex(num_edge_variables + 1)
+# 		edge.edge_variable_map[edge_vi] = (node.index,vi)
+# 		edge.node_variable_map[(node.index,vi)] = edge_vi
+# 		return edge_vi
+# 	end
+# end
 
 ### MOI Functions
 
-# function MOI.get(
-# 	edge::Edge{1},
-# 	attr::MOI.ListOfVariableIndices
-# )::Vector{MOI.VariableIndex}
-# 	node = edge.elements[1]
-# 	return MOI.get(node, MOI.ListOfVariableIndices())
-# end
-
-# # get list of variable indices on the edge
-# function MOI.get(
-# 	edge::Edge,
-# 	attr::MOI.ListOfVariableIndices
-# )::Vector{MOI.VariableIndex}
-# 	return collect(values(edge.edge_variables))
-# end
-
-function get_node_variables(graph::OptiGraph, edge::Edge{1})
-	block = graph.block.block_by_index[edge.block_index]
-	node = node_by_index(graph, edge.hyperedge.vertices[1])
-	variables = MOI.get(node, MOI.ListOfVariableIndices())
-	return (node.index, variables)
+# get the variables on an edge
+function MOI.get(
+	graph::OptiGraph,
+	edge::HyperEdge,
+	attr::MOI.ListOfVariableIndices
+)::Vector{MOI.VariableIndex}
+	
+	return MOI.get(graph.moi_model, node, MOI.ListOfVariableIndices())
 end
 
-function get_node_variables(graph::OptiGraph, edge::Edge)
-	return graph.block.variables[edge]
+function MOI.add_variable(graph::OptiGraph, node::HyperNode)
+	variable = MOI.add_variable(graph.moi_model)
+	MOI.set(graph.moi_model, MOI.NodeIndex(), variable, node)
+	return variable
 end
 
-function MOI.add_variable(node::Node)
-	return MOI.add_variable(node.variables)
-end
-
-function MOI.add_variables(node::Node, n::Int64)
-	return MOI.add_variables(node.variables, n)
+function MOI.add_variables(graph::OptiGraph, node::Node, n::Int64)
+	variables = MOI.add_variables(graph.moi_model, n)
 end
 
 function MOI.add_constraint(
-	node::Node,
-	vi::MOI.VariableIndex,
+	graph::OptiGraph,
+	variable::MOI.VariableIndex,
 	set::S
 ) where {S <: MOI.AbstractSet}
-	return MOI.add_constraint(node.variables, vi, set)
+	return MOI.add_constraint(graph.moi_model, variable, set)
 end
 
+# add_constraint(optimizer, node::HyperNode) ==> add to self-edge
+
 function MOI.add_constraint(
+	graph::OptiGraph, 
 	edge::Edge,
 	func::F,
 	set::S
 ) where {F <: MOI.AbstractFunction, S <: MOI.AbstractSet}
-	ci = MOI.add_constraint(edge.moi_model, func, set)
-	return ci
+	local_ci = MOI.add_constraint(edge.model, func, set)
+	block_index = MOI.get(optimizer.block, MOI.NumberOfConstraints{F,S}())
+	block_ci = MOI.ConstraintIndex{F,S}(block_index)
+	return block_ci
 end
-
-function MOI.Nonlinear.add_constraint(
-	edge::Edge,
-	func::Expr,
-	set::S
-) where {S <: MOI.AbstractSet}
-	edge.nonlinear_model == nothing && edge.nonlinear_model = MOI.Nonlinear.Model()
-	ci = MOI.add_constraint(edge.nonlinear_model, expr, set)
-	return ci
-end
-
-function MOI.set(
-    edge::Edge,
-    ::MOI.NLPBlockDualStart,
-    values::Union{Nothing,Vector},
-)
-    MOI.set(edge.nonlinear_model,values)
-    return
-end
-
-MOI.get(edge::EdgeModel, ::MOI.NLPBlockDualStart) = edge.nlp_dual_start
 
 ### Forward methods so Node and Edge objects call their underlying MOI model
 
 # forward node methods
-@forward Node.variables (MOI.get, MOI.set)
+@forward Node.model (MOI.get, MOI.set)
 
 # forward edge methods
 @forward Edge.model (MOI.get, MOI.set, MOI.eval_objective, MOI.eval_objective_gradient,
@@ -368,22 +310,22 @@ MOI.get(edge::EdgeModel, ::MOI.NLPBlockDualStart) = edge.nlp_dual_start
 
 ### Block attributes
 
-function MOI.get(block::Block, attr::MOI.ListOfConstraintTypesPresent)
-	ret = []
-	for node in get_nodes(block)
-		append!(ret, MOI.get(node.model, attr))
-	end
-	for edge in get_edges(block)
-		append!(ret, MOI.get(edge.model, attr))
-	end
-    return unique(ret)
-end
+# function MOI.get(graph::OptiGraph, attr::MOI.ListOfConstraintTypesPresent) where T <: AbstractBlock
+# 	ret = []
+# 	for node in get_nodes(block)
+# 		append!(ret, MOI.get(node.model, attr))
+# 	end
+# 	for edge in get_edges(block)
+# 		append!(ret, MOI.get(edge.model, attr))
+# 	end
+#     return unique(ret)
+# end
 
-function MOI.get(block::Block, attr::MOI.NumberOfVariables)
+function MOI.get(block::T, attr::MOI.NumberOfVariables) where T <: AbstractBlock
     return sum(MOI.get(node, attr) for node in get_nodes(block))
 end
 
-function MOI.get(block::Block, attr::MOI.ListOfVariableIndices)
+function MOI.get(block::T, attr::MOI.ListOfVariableIndices) where T <: AbstractBlock
 	var_list = []
 	for node in get_nodes(block)
 		append!(var_list, MOI.get(node, attr))
@@ -395,6 +337,7 @@ function MOI.get(
     block::T,
     attr::MOI.NumberOfConstraints{F,S}
 ) where {T <: AbstractBlock, F <: MOI.AbstractFunction, S <: MOI.AbstractSet}
+
     return sum(MOI.get(edge, attr) for edge in get_edges(block))
 end
 
@@ -448,7 +391,7 @@ end
 
 # coupling edge
 # function add_edge!(
-# 	optimizer::AbstractBlockOptimizer,
+# 	graph::OptiGraph,
 # 	block_index::BlockIndex,
 # 	nodes::NTuple{N, Node} where N
 # )::Edge
@@ -474,7 +417,7 @@ end
 
 # UPDATE: let's not do edges between nodes and blocks
 # function add_edge!(
-# 	optimizer::AbstractBlockOptimizer,
+# 	graph::OptiGraph,
 # 	block_index::BlockIndex,
 # 	sub_blocks::NTuple{N, Block} where N
 # )::Edge
@@ -496,7 +439,7 @@ end
 
 # UPDATE: let's not do edges between nodes and blocks
 # function add_edge!(
-# 	optimizer::AbstractBlockOptimizer,
+# 	graph::OptiGraph,
 # 	block_index::BlockIndex,
 # 	node::Node,
 # 	sub_block::Block
