@@ -9,8 +9,8 @@ function get_nodes_to_depth(block::Block, n_layers::Int=0)
 	nodes = block.nodes
 	if n_layers > 0
 		for sub_block in block.sub_blocks
-			nodes = get_nodes_to_depth(sub_block, n_layers-1)
-			nodes = [nodes; sub_block.nodes]
+			inner_nodes = get_nodes_to_depth(sub_block, n_layers-1)
+			nodes = [nodes; inner_nodes]
 		end
 	end
 	return nodes
@@ -32,7 +32,7 @@ end
 
 # edges attached to a single node
 function self_edges(block::Block)
-	return filter((edge) -> length(edge.index.vertices) == 1, block.edges)
+	return filter((edge) -> length(edge.index.vertices) === 1, block.edges)
 end
 
 # edges that connect nodes

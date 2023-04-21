@@ -49,7 +49,7 @@ getnodes(hypergraph::HyperGraph) = hypergraph.vertices
 
 #HyperEdge
 Base.reverse(e::HyperEdge) = error("A hyperedge does not support reverse()")
-==(h1::HyperEdge, h2::HyperEdge) = collect(h1.vertices) == collect(h2.vertices)
+Base.:(==)(h1::HyperEdge, h2::HyperEdge) = h1.vertices === h2.vertices
 function Graphs.add_edge!(graph::HyperGraph, vertices::HyperNode...)
     return add_hyperedge!(graph, vertices...)
 end

@@ -1,6 +1,7 @@
 abstract type AbstractBlock end
-abstract type NodeModelLike <: MOI.ModelLike end
-abstract type EdgeModelLike <: MOI.ModelLike end
+abstract type AbstractNodeVariableMap end
+# abstract type NodeModelLike <: MOI.ModelLike end
+# abstract type EdgeModelLike <: MOI.ModelLike end
 
 ### BlockIndex
 
@@ -22,11 +23,11 @@ internal and external indexes for each variable. The internal indexes are used f
 interoperability with MOI objects. The external variable indexes represent the actual 
 indices used to define constraints in an Graph.
 """
-struct Node <: NodeModelLike
+struct Node
 	index::HyperNode
 	block_index::BlockIndex
 	variables::MOIU.VariablesContainer
-	# dual starts, etc...
+	# variable attributes dual starts, etc...
 	var_attr::Dict{MOI.AbstractVariableAttribute,Dict{MOI.VariableIndex, Any}}
 end
 function Node(vertex::HyperNode, block_index::BlockIndex)
@@ -49,7 +50,11 @@ function MOI.add_variable(node::Node)
 end
 
 function MOI.add_variables(node::Node, n::Int64)
-	return MOI.add_variables(node.variables, n)
+	vars = MOI.VariableIndex[]
+	for _ = 1:n
+		push!(vars, MOI.add_variable(node.variables))
+	end
+	return vars
 end
 
 function MOI.add_constraint(
@@ -62,21 +67,26 @@ end
 
 ### Edge
 
-struct NodeIndexMap
-	int_to_ext::MOIU.CleverDicts.CleverDict{MOI.VariableIndex,Tuple{HyperNode,MOI.VariableIndex}}
-	ext_to_int::MOIU.CleverDicts.CleverDict{Tuple{HyperNode,MOI.VariableIndex},MOI.VariableIndex}
+struct NodeIndexMap <: AbstractNodeVariableMap
+	int_to_ext::OrderedDict{MOI.VariableIndex,Tuple{HyperNode,MOI.VariableIndex}}
+	ext_to_int::OrderedDict{Tuple{HyperNode,MOI.VariableIndex},MOI.VariableIndex}
+end
+function NodeIndexMap()
+	int_to_ext = OrderedDict{MOI.VariableIndex,Tuple{HyperNode,MOI.VariableIndex}}()
+	ext_to_int = OrderedDict{Tuple{HyperNode,MOI.VariableIndex},MOI.VariableIndex}()
+	return NodeIndexMap(int_to_ext, ext_to_int)
 end
 
-# function node_variables(var_map::SingleNodeVariableMap)
-#     return MOI.get(var_map.node, MOI.ListOfVariableIndices())
-# end
+struct SelfEdgeMap <: AbstractNodeVariableMap
+	node::Node
+end
 
 function node_variables(var_map::NodeIndexMap)
 	return collect(values(var_map.int_to_ext))
 end
 
-function node_variables(node::Node)
-	return MOI.get(node, MOI.ListOfVariableIndices())
+function node_variables(var_map::SelfEdgeMap)
+	return (var_map.node.index, MOI.get(var_map.node, MOI.ListOfVariableIndices()))
 end
 
 """
@@ -86,23 +96,22 @@ An edge represents different types of coupling. For instance an Edge{Tuple{Node}
 the couple variables within a single node. An Edge{Tuple{N,Node}} couple variables across
 one or more nodes.
 """
-mutable struct Edge <: EdgeModelLike
+mutable struct Edge{T <: AbstractNodeVariableMap}
 	index::HyperEdge
 	block_index::BlockIndex
 	# NOTE: moi_model only stores constraints, not variable indexes
 	moi_model::MOIU.UniversalFallback{MOIU.Model{Float64}}
 	nonlinear_model::Union{Nothing,MOI.Nonlinear.Model}
-	variable_map::Union{Node,NodeIndexMap}
+	variable_map::T
 end
 
 function Edge(
 	hyperedge::HyperEdge,
 	block_index::BlockIndex,
-	var_map::Union{Node,NodeIndexMap}
-)
-	moi_model = MOIU.UniversalFallback{MOIU.Model{Float64}}()
-	num_vertices(hyperedge) == 1 && (@assert var_map isa Node)
-	return Edge(index, block_index, moi_model, nothing, var_map)
+	var_map::T
+) where T <: AbstractNodeVariableMap
+	moi_model = MOIU.UniversalFallback(MOIU.Model{Float64}())
+	return Edge{typeof(var_map)}(hyperedge, block_index, moi_model, nothing, var_map)
 end
 
 function edge_index(edge::Edge)::HyperEdge
@@ -110,7 +119,7 @@ function edge_index(edge::Edge)::HyperEdge
 end
 
 function is_self_edge(edge::Edge)
-	return length(edge.index.vertices) == 1
+	return length(edge.index.vertices) === 1
 end
 
 function node_variables(edge::Edge)
@@ -119,13 +128,19 @@ end
 
 ### MOI Edge Functions
 
-function MOI.add_variable(edge::Edge, node::Node, variable::MOI.VariableIndex)
-	if is_self_edge(edge)
-		error("Self edge variables should be added directly to the specified node")
-	end
+function MOI.add_variable(edge::Edge{NodeIndexMap}, node::Node, variable::MOI.VariableIndex)
 	internal_variable = MOI.add_variable(edge.moi_model)
-	edge.variable_map[internal_variable] = (node.index, variable)
+	edge.variable_map.int_to_ext[internal_variable] = (node.index, variable)
+	edge.variable_map.ext_to_int[(node.index, variable)] = internal_variable
 	return internal_variable
+end
+
+function MOI.get(edge::Edge{SelfEdgeMap}, attr::MOI.ListOfVariableIndices)
+	return MOI.get(edge.variable_map.node, attr)
+end
+
+function MOI.get(edge::Edge{NodeIndexMap}, ::MOI.ListOfVariableIndices)
+	return collect(keys(edge.variable_map.int_to_ext))
 end
 
 function MOI.add_constraint(
@@ -142,37 +157,44 @@ function MOI.Nonlinear.add_constraint(
 	expr::Expr,
 	set::S
 ) where {S <: MOI.AbstractSet}
-	edge.nonlinear_model == nothing && (edge.nonlinear_model = MOI.Nonlinear.Model())
-	constraint_index = MOI.add_constraint(edge.nonlinear_model, expr, set)
+	edge.nonlinear_model === nothing && (edge.nonlinear_model = MOI.Nonlinear.Model())
+	constraint_index = MOI.Nonlinear.add_constraint(edge.nonlinear_model, expr, set)
 	return constraint_index
 end
 
 ### Forward methods so Node and Edge objects call their underlying MOI models
 
-# forward node methods
 @forward Node.variables (MOI.get, MOI.set)
 
-# forward edge methods
 @forward Edge.moi_model (MOI.get, MOI.set)
 
 ### Blocks
 
-mutable struct Block{T<:AbstractBlock} <: AbstractBlock
+mutable struct Block
 	index::BlockIndex
 	parent_index::Union{Nothing,BlockIndex}
 	nodes::Vector{Node}
 	edges::Vector{Edge}
-	sub_blocks::Vector{T}
+	sub_blocks::Vector{Block}
 	node_by_index::OrderedDict{HyperNode,Node}
 	edge_by_index::OrderedDict{HyperEdge,Edge}
 	block_by_index::OrderedDict{BlockIndex,Block}
 	function Block(block_index::Int64)
-		block = new{Block}()
+		block = new()
 		block.index = BlockIndex(block_index)
+		block.nodes = Node[]
+		block.edges = Edge[]
 		block.parent_index = nothing
 		block.sub_blocks = Vector{Block}()
+		block.node_by_index = OrderedDict{HyperNode,Node}()
+		block.edge_by_index = OrderedDict{HyperEdge,Edge}()
 		block.block_by_index = OrderedDict{BlockIndex,Block}()
 		block.block_by_index[block.index] = block
+		return block
+	end
+	function Block(parent_index::Int64, block_index::Int64)
+		block = Block(block_index)
+		block.parent_index = BlockIndex(parent_index)
 		return block
 	end
 end
@@ -226,7 +248,7 @@ function Graph()
 end
 
 function number_of_blocks(graph::Graph)
-	return length(graph.block_by_index)
+	return length(graph.block.block_by_index)
 end
 
 """
@@ -251,18 +273,28 @@ end
 
 ### add_edge
 
+function add_edge(graph::Graph, nodes::NTuple{N,Node})::Edge where N
+	return add_edge(graph, graph.block, nodes)
+end
+
 function add_edge(graph::Graph, block::Block, nodes::NTuple{N,Node})::Edge where N
 	# we do not allow arbitrary edges. at most between two layers.
 	@assert isempty(setdiff(nodes, get_nodes_to_depth(block, 1)))
 	hypernodes = node_index.(nodes)
-	hyperedge = add_edge!(graph.hypergraph, hypernodes)
-	edge = Edge(hyperedge, block_index)
+	hyperedge = add_edge!(graph.hypergraph, hypernodes...)
+
+	if length(nodes) === 1
+		edge = Edge(hyperedge, block.index, SelfEdgeMap(nodes[1]))
+	else
+		edge = Edge(hyperedge, block.index, NodeIndexMap())
+	end
 	push!(block.edges,edge)
 	return edge
 end
 
 function add_edge(graph::Graph, node::Node)
-	return add_edge(graph, graph.block, (node,))
+	block = graph.block.block_by_index[node.block_index]
+	return add_edge(graph, block, (node,))
 end
 
 ### add_sub_block
@@ -276,9 +308,9 @@ function add_sub_block(graph::Graph, parent::Block)::Block
 	push!(parent.sub_blocks, sub_block)
 
 	# track new block index on root and block
-	parent.block_by_index[sub_block.index] = sub_block
+	root.block_by_index[BlockIndex(new_block_index)] = sub_block
 	if root.index != parent.index
-		root.block_by_index[sub_block.index] = sub_block
+		parent.block_by_index[BlockIndex(new_block_index)] = sub_block
 	end
 	return sub_block
 end

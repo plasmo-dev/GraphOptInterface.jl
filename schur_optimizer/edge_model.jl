@@ -1,5 +1,15 @@
-mutable struct EdgeModel <: BOI.EdgeModelLike
-    qp_data::QPBlockData{Float64}
+# include(joinpath(@__DIR__,"qp_data.jl"))
+import MadNLP
+
+const _SETS = Union{MOI.GreaterThan{Float64},MOI.LessThan{Float64},MOI.EqualTo{Float64}}
+
+const _FUNCTIONS = Union{
+    MOI.ScalarAffineFunction{Float64},
+    MOI.ScalarQuadraticFunction{Float64},
+}
+
+mutable struct EdgeModel <: MOI.ModelLike
+    qp_data::MadNLP.QPBlockData{Float64}
     nlp_dual_start::Union{Nothing,Vector{Float64}}
     nlp_data::MOI.NLPBlockData
     sense::MOI.OptimizationSense
@@ -12,6 +22,180 @@ function EdgeModel()
         MOI.FEASIBILITY_SENSE
     )
 end
+
+# map each edge in graph to a model we can evaluate
+function build_edge_model(edge::GOI.Edge; _differentiation_backend=MOI.Nonlinear.SparseReverseMode())
+    edge_model = EdgeModel()
+    vars = MOI.get(edge, MOI.ListOfVariableIndices())
+    cons = MOI.get(edge, MOI.ListOfConstraintTypesPresent())
+    
+    # MOIU requires an index map to pass constraints. we assume a 1 to 1 mapping.
+    var_map = MOIU.IndexMap()
+    for var in vars
+        var_map[var] = var
+    end
+
+    MOIU.pass_nonvariable_constraints(edge_model, edge.moi_model, var_map, cons)
+    MOIU.pass_attributes(edge_model, edge.moi_model, var_map)
+
+    # TODO: we might need to pass constraint attributes
+    # MOIU.pass_attributes(edge_model, edge.moi_model, var_map, constraints) 
+    
+    # create nlp-block if needed
+    if edge.nonlinear_model != nothing
+        edge_evaluator = MOI.Nonlinear.Evaluator(edge.nonlinear_model, _differentiation_backend, vars)
+        MOI.set(edge_model, MOI.NLPBlock(), MOI.NLPBlockData(edge_evaluator))
+    end
+
+    return edge_model
+end
+
+function MOI.supports_constraint(
+    ::EdgeModel,
+    ::Type{<:Union{MOI.VariableIndex,_FUNCTIONS}},
+    ::Type{<:_SETS},
+)
+    return true
+end
+
+function MOI.is_valid(
+    edge::EdgeModel,
+    ci::MOI.ConstraintIndex{<:_FUNCTIONS,<:_SETS},
+)
+    return MOI.is_valid(edge.qp_data, ci)
+end
+
+### MOI.ListOfConstraintTypesPresent
+
+function MOI.get(edge::EdgeModel, attr::MOI.ListOfConstraintTypesPresent)
+    return MOI.get(edge.qp_data, attr)
+end
+
+function MOI.add_constraint(
+    edge::EdgeModel,
+    func::_FUNCTIONS, 
+    set::_SETS
+)
+    # TODO: variable mapping
+    index = MOI.add_constraint(edge.qp_data, func, set)
+    #model.solver = nothing
+    return index
+end
+
+function MOI.get(
+    edge::EdgeModel,
+    attr::Union{MOI.NumberOfConstraints{F,S},MOI.ListOfConstraintIndices{F,S}},
+) where {F<:_FUNCTIONS,S<:_SETS}
+    return MOI.get(edge.qp_data, attr)
+end
+
+function MOI.get(
+    edge::EdgeModel,
+    attr::Union{
+        MOI.ConstraintFunction,
+        MOI.ConstraintSet,
+        MOI.ConstraintDualStart,
+    },
+    ci::MOI.ConstraintIndex{F,S},
+) where {F<:_FUNCTIONS,S<:_SETS}
+    return MOI.get(edge.qp_data, attr, ci)
+end
+
+function MOI.set(
+    edge::EdgeModel,
+    ::MOI.ConstraintSet,
+    ci::MOI.ConstraintIndex{F,S},
+    set::S,
+) where {F<:_FUNCTIONS,S<:_SETS}
+    MOI.set(edge.qp_data, MOI.ConstraintSet(), ci, set)
+    #model.solver = nothing
+    return
+end
+
+function MOI.supports(
+    ::EdgeModel,
+    ::MOI.ConstraintDualStart,
+    ::Type{MOI.ConstraintIndex{F,S}},
+) where {F<:_FUNCTIONS,S<:_SETS}
+    return true
+end
+
+function MOI.set(
+    edge::EdgeModel,
+    attr::MOI.ConstraintDualStart,
+    ci::MOI.ConstraintIndex{F,S},
+    value::Union{Real,Nothing},
+) where {F<:_FUNCTIONS,S<:_SETS}
+    MOI.throw_if_not_valid(model, ci)
+    MOI.set(edge.qp_data, attr, ci, value)
+    return
+end
+
+### MOI.NLPBlockDualStart
+
+MOI.supports(::EdgeModel, ::MOI.NLPBlockDualStart) = true
+
+function MOI.set(
+    edge::EdgeModel,
+    ::MOI.NLPBlockDualStart,
+    values::Union{Nothing,Vector},
+)
+    edge.nlp_dual_start = values
+    return
+end
+
+MOI.get(edge::EdgeModel, ::MOI.NLPBlockDualStart) = edge.nlp_dual_start
+
+### MOI.NLPBlock
+
+MOI.supports(::EdgeModel, ::MOI.NLPBlock) = true
+
+MOI.get(edge::EdgeModel, ::MOI.NLPBlock) = edge.nlp_data
+
+function MOI.set(edge::EdgeModel, ::MOI.NLPBlock, nlp_data::MOI.NLPBlockData)
+    edge.nlp_data = nlp_data
+    return
+end
+
+### ObjectiveSense
+
+MOI.supports(::EdgeModel, ::MOI.ObjectiveSense) = true
+
+function MOI.set(
+    edge::EdgeModel,
+    ::MOI.ObjectiveSense,
+    sense::MOI.OptimizationSense,
+)
+    edge.sense = sense
+    return
+end
+
+MOI.get(edge::EdgeModel, ::MOI.ObjectiveSense) = edge.sense
+
+### ObjectiveFunction
+function MOI.supports(
+    ::EdgeModel,
+    ::MOI.ObjectiveFunction{<:Union{MOI.VariableIndex,<:_FUNCTIONS}},
+)
+    return true
+end
+
+function MOI.get(
+    edge::EdgeModel,
+    attr::Union{MOI.ObjectiveFunctionType,MOI.ObjectiveFunction},
+)
+    return MOI.get(edge.qp_data, attr)
+end
+
+function MOI.set(
+    edge::EdgeModel,
+    attr::MOI.ObjectiveFunction{F},
+    func::F,
+) where {F<:Union{MOI.VariableIndex,<:_FUNCTIONS}}
+    MOI.set(edge.qp_data, attr, func)
+    return
+end
+
 ### Eval_F_CB
 
 function MOI.eval_objective(edge::EdgeModel, x::AbstractArray{T}) where T
