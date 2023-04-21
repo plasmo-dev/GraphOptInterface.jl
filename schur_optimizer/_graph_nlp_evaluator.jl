@@ -1,5 +1,3 @@
-# TODO: Associate QPData + NLPData with each edge
-
 struct EdgeData
     column_indices::Union{UnitRange{Int64},Vector{Int64}}
     row_indices::Union{UnitRange{Int64},Vector{Int64}}

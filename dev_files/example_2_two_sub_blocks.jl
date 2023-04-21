@@ -1,3 +1,4 @@
+push!(LOAD_PATH, "..")
 using Revise
 using Pkg
 Pkg.activate(@__DIR__())
@@ -7,12 +8,12 @@ const GOI = GraphOptInterface
 
 # schur_optimizer.jl will be migrated to MadNLP
 # include(joinpath(@__DIR__(),"../schur_optimizer/schur_optimizer.jl"))
-#optimizer = SchurOptimizer()
+# optimizer = SchurOptimizer()
 
 ##################################################
 # block 0: node 0 and edge 0
 ##################################################
-graph = GOI.get(optimizer, GOI.Graph())
+graph = GOI.Graph()
 node0 = GOI.add_node(graph)
 x0 = GOI.add_variables(node0, 3)
 
