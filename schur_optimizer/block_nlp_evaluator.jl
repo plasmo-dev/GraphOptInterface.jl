@@ -1,30 +1,26 @@
+include(joinpath(@__DIR__,"utils.jl"))
+
+using DataStructures
+using SparseArrays
+
+const MOIU = MOI.Utilities
+
+struct _EmptyNLPEvaluator <: MOI.AbstractNLPEvaluator end
+
+MOI.features_available(::_EmptyNLPEvaluator) = [:Grad, :Jac, :Hess]
+MOI.initialize(::_EmptyNLPEvaluator, ::Any) = nothing
+MOI.eval_constraint(::_EmptyNLPEvaluator, g, x) = nothing
+MOI.jacobian_structure(::_EmptyNLPEvaluator) = Tuple{Int64,Int64}[]
+MOI.hessian_lagrangian_structure(::_EmptyNLPEvaluator) = Tuple{Int64,Int64}[]
+MOI.eval_constraint_jacobian(::_EmptyNLPEvaluator, J, x) = nothing
+MOI.eval_hessian_lagrangian(::_EmptyNLPEvaluator, H, x, σ, μ) = nothing
+
 # Track indices for each edge
 struct EdgeIndexes
 	column_indices::Union{UnitRange{Int64},Vector{Int64}}
     row_indices::Union{UnitRange{Int64},Vector{Int64}}
     nnzs_jac_inds::UnitRange{Int}
     nnzs_hess_inds::UnitRange{Int}
-end
-
-# map each edge in graph to a model we can evaluate
-function build_edge_model(edge::GOI.Edge; _differentiation_backend=MOI.Nonlinear.SparseReverseMode())
-	edge_model = EdgeModel()
-	vars = MOI.ListOfVariableIndices(edge)
-	
-	# MOIU requires an index map to pass constraints. we assume a 1 to 1 mapping.
-	var_map = MOIU.IndexMap()
-	for var in vars
-		var_map[var] = var
-	end
-	MOIU.pass_nonvariable_constraints(edge_model.qp_data, edge.moi_model, var_map)
-	
-	# create nlp-block if needed
-	if edge.nonlinear_model != nothing
-		edge_evaluator = MOI.Nonlinear.Evaluator(edge.nonlinear_model, _differentiation_backend, vars)
-		edge_model.nlp_data = MOI.NLPBlockData(edge_evaluator)
-	end
-
-	return edge_model
 end
 
 mutable struct BlockData
@@ -102,7 +98,7 @@ mutable struct BlockNLPEvaluator <: MOI.AbstractNLPEvaluator
 end
 function BlockNLPEvaluator(graph::GOI.Graph)
     block_data = BlockData()
-    return new(
+    return BlockNLPEvaluator(
         graph,
         block_data,
         0.0,
@@ -113,23 +109,23 @@ function BlockNLPEvaluator(graph::GOI.Graph)
     )
 end
 
-function _add_sublock_data!(block::Block, block_data::BlockData)
+function _add_sublock_data!(block::GOI.Block, block_data::BlockData)
     for sub_block in block.sub_blocks
         sub_block_data = BlockData()
-        block_data.sub_block_data[sub_block.index] = sub_block_data
+        block_data.sub_block_dict[sub_block.index] = sub_block_data
         _add_sublock_data!(sub_block, sub_block_data)
     end
     return
 end
 
 function _build_node_data!(
-    block::Block,
+    block::GOI.Block,
     block_data::BlockData;
     offset_columns=0
 )
     count_columns = 0
     offset_start = offset_columns
-    node_columns = OrderedDict{GOI.Node,UnitRange}()
+    node_columns = OrderedDict{GOI.HyperNode,UnitRange}()
 
     # get column ranges for each node
     for node in block.nodes
@@ -138,15 +134,15 @@ function _build_node_data!(
         count_columns += num_vars
     end
     block_data.num_variables = count_columns
-    block_data.node_data_dict = node_columns
+    block_data.node_column_dict = node_columns
     block_data.local_columns = offset_columns+1:offset_columns+count_columns
     
     # build sub-blocks. each block stores sub-block data too
     offset_columns = offset_columns+count_columns
     for sub_block in block.sub_blocks
-        sub_block_data = block_data.sub_block_data[sub_block.index]
+        sub_block_data = block_data.sub_block_dict[sub_block.index]
         _build_node_data!(sub_block, sub_block_data; offset_columns=offset_columns)
-        merge!(block_data.node_columns, sub_block_data.node_columns) 
+        merge!(block_data.node_column_dict, sub_block_data.node_column_dict) 
 
         # update offset
         # offset_columns = offset_columns+sub_block_data.num_variables
@@ -160,7 +156,7 @@ function _build_node_data!(
 end
 
 function _build_edge_data!(
-    block::Block,
+    block::GOI.Block,
     block_data::BlockData,
     requested_features::Vector{Symbol};
     offset_rows=0,
@@ -171,7 +167,7 @@ function _build_edge_data!(
     count_nnzj = 0
     count_nnzh = 0
     edge_index_dict = OrderedDict{GOI.HyperEdge,EdgeIndexes}()
-    edge_model_dict = OrderedDict{GOI.HyperEdge,EdgeModel}
+    edge_model_dict = OrderedDict{GOI.HyperEdge,EdgeModel}()
     offset_start = offset_rows
     
     # each edge contains constraints, jacobian, and hessian data
@@ -183,10 +179,10 @@ function _build_edge_data!(
         ### map edge variable indices to evaluator columns
         
         # TODO: update for new data structure
-        if num_vertices(edge) == 1
+        if GOI.is_self_edge(edge)
             # if self-edge, just pull unit ranges
-            node_index = edge.index.vertices[1]
-            columns = block_data.node_data_dict[node_index]
+            node_index = first(edge.index.vertices)
+            columns = block_data.node_column_dict[node_index]
         else
             # look up column values
             node_variable_indices = GOI.node_variables(edge)
@@ -208,24 +204,26 @@ function _build_edge_data!(
 
         ### edge jacobian indices
         if :Jac in requested_features
-            jacobian_sparsity = MOI.jacobian_structure(edge)
+            jacobian_sparsity = MOI.jacobian_structure(edge_model)
             nnzs_jac_inds = (count_nnzj+1:count_nnzj+length(jacobian_sparsity)).+offset_nnzj
             count_nnzj += length(jacobian_sparsity)
         end
 
         ### edge hessian indices
         if :Hess in requested_features
-            hessian_sparsity = MOI.hessian_lagrangian_structure(edge)
+            hessian_sparsity = MOI.hessian_lagrangian_structure(edge_model)
             nnzs_hess_inds = (count_nnzh+1:count_nnzh+length(hessian_sparsity)).+offset_nnzh
             count_nnzh += length(hessian_sparsity)
         end
 
         ### store indexes
-        edge_index_dict[edge.index] = EdgeIndexes(columns, row, nnzs_jac_inds, nnzs_hess_inds)
+        edge_index_dict[edge.index] = EdgeIndexes(columns, rows, nnzs_jac_inds, nnzs_hess_inds)
+        edge_model_dict[edge.index] = edge_model
     end
     
     block_data.local_rows = offset_rows+1:offset_rows+count_rows
-    block_data.edge_data_dict = edge_data_dict
+    block_data.edge_index_dict = edge_index_dict
+    block_data.edge_model_dict = edge_model_dict
     block_data.num_constraints = count_rows
     block_data.nnz_jac = count_nnzj
     block_data.nnz_hess = count_nnzh
@@ -267,11 +265,11 @@ function build_block_data(
     
     block_data = BlockData()
 
-    _add_sublock_data!(graph, block_data)
+    _add_sublock_data!(graph.block, block_data)
 
-    _build_node_data!(graph, block_data)
+    _build_node_data!(graph.block, block_data)
 
-    _build_edge_data!(graph, block_data, requested_features)
+    _build_edge_data!(graph.block, block_data, requested_features)
 
     block_data.all_columns = 1:block_data.num_variables
     block_data.all_rows = 1:block_data.num_constraints
@@ -289,25 +287,26 @@ end
 ### Eval_F_CB
 
 function MOI.eval_objective(evaluator::BlockNLPEvaluator, x::AbstractArray{T}) where T
-    return eval_objective(evaluator.block_data, x)
+    return eval_objective(evaluator.graph.block, evaluator.block_data, x)
 end
 
-function eval_objective(block_data::BlockData, x::AbstractArray)
+function eval_objective(block::GOI.Block, block_data::BlockData, x::AbstractArray)
 
     obj = Threads.Atomic{Float64}(0.)
 
     # evaluate root edges
-    Threads.@threads for i = 1:length(block_data.edges)
-        edge = block_data.edges[i]
-        edge_data = block_data.edge_data_dict[edge]
-        columns = edge_data.column_indices
+    Threads.@threads for i = 1:length(block.edges)
+    	edge_index = block.edges[i].index
+        edge_model = block_data.edge_model_dict[edge_index]
+        edge_indexes = block_data.edge_index_dict[edge_index]
+        columns = edge_indexes.column_indices
         Threads.atomic_add!(obj, MOI.eval_objective(edge_model, view(x, columns)))
     end
 
     # evaluate sub blocks
     Threads.@threads for i = 1:length(block.sub_blocks)
         sub_block = block.sub_blocks[i]
-        sub_block_data = block_data.sub_block_data[sub_block.index]
+        sub_block_data = block_data.sub_block_dict[sub_block.index]
         # TODO: think about how to pass only the block columns instead of `x`
         Threads.atomic_add!(
             obj,
@@ -315,4 +314,266 @@ function eval_objective(block_data::BlockData, x::AbstractArray)
         )
     end
     return obj.value
+end
+
+
+### Eval_Grad_F_CB
+
+function MOI.eval_objective_gradient(
+    evaluator::BlockNLPEvaluator,
+    gradient::AbstractArray,
+    x::AbstractArray
+)
+    gradient[:] .= 0.0
+    eval_objective_gradient(evaluator.graph.block, evaluator.block_data, gradient, x)
+end
+
+function eval_objective_gradient(
+    block::GOI.Block,
+    block_data::BlockData,
+    gradient::AbstractArray,
+    x::AbstractArray
+)
+	#length(block.edges) == 0 && return
+
+    # IDEA: fill each edge gradient as a sparse vector, then sum together
+    edge_gradients = [spzeros(length(gradient)) for _ = 1:length(block.edges)]
+    Threads.@threads for i = 1:length(block.edges)
+        edge_index = block.edges[i].index
+        edge_model = block_data.edge_model_dict[edge_index]
+        edge_indexes = block_data.edge_index_dict[edge_index]
+        columns = edge_indexes.column_indices
+        MOI.eval_objective_gradient(edge_model, view(edge_gradients[i],columns), view(x,columns))
+    end
+
+    # errors if there are no edges on the block
+    gradient[:] .+= sum(edge_gradients)
+
+    # evaluate sub blocks
+    Threads.@threads for i = 1:length(block.sub_blocks)
+        sub_block = block.sub_blocks[i]
+        sub_block_data = block_data.sub_block_dict[sub_block.index]
+        eval_objective_gradient(sub_block, sub_block_data, gradient, x)
+    end
+
+    return
+end
+
+### Eval_G_CB
+
+function MOI.eval_constraint(
+    evaluator::BlockNLPEvaluator,
+    c::AbstractArray,
+    x::AbstractArray
+)
+    eval_constraint(evaluator.graph.block, evaluator.block_data, c, x)
+end
+
+function eval_constraint(
+    block::GOI.Block,
+    block_data::BlockData,
+    c::AbstractArray,
+    x::AbstractArray
+)
+    Threads.@threads for i = 1:length(block.edges)
+        edge_index = block.edges[i].index
+        edge_model = block_data.edge_model_dict[edge_index]
+        edge_indexes = block_data.edge_index_dict[edge_index]
+        columns = edge_indexes.column_indices
+        rows = edge_indexes.row_indices
+        MOI.eval_constraint(edge_model, view(c, rows), view(x, columns))
+    end
+
+    # evaluate sub blocks
+    Threads.@threads for i = 1:length(block.sub_blocks)
+        sub_block = block.sub_blocks[i]
+        sub_block_data = block_data.sub_block_dict[sub_block.index]
+        eval_constraint(sub_block, sub_block_data, c, x)
+    end
+    
+    return
+end
+
+### Eval_Jac_G_CB
+
+function MOI.jacobian_structure(evaluator::BlockNLPEvaluator)::Vector{Tuple{Int64,Int64}}
+
+    I = Vector{Int64}(undef, evaluator.block_data.nnz_jac) # row indices
+    J = Vector{Int64}(undef, evaluator.block_data.nnz_jac) # column indices
+
+    jacobian_structure(evaluator.graph.block, evaluator.block_data, I, J)
+    jacobian_sparsity = collect(zip(I, J))
+
+    return jacobian_sparsity
+end
+
+function jacobian_structure(
+    block::GOI.Block,
+    block_data::BlockData,
+    I::AbstractArray,
+    J::AbstractArray
+)
+
+    Threads.@threads for i = 1:length(block.edges)
+        edge_index = block.edges[i].index
+        edge_model = block_data.edge_model_dict[edge_index]
+        edge_indexes = block_data.edge_index_dict[edge_index]
+        isempty(edge_indexes.nnzs_jac_inds) && continue
+
+        localI = view(I, edge_indexes.nnzs_jac_inds)
+        localJ = view(J, edge_indexes.nnzs_jac_inds)
+        edge_jacobian_sparsity = MOI.jacobian_structure(edge_model)
+
+        # update view with edge jacobian structure
+        for (k,(row,col)) in enumerate(edge_jacobian_sparsity)
+            # map coordinates to global indices
+            # rows are ordered, so offset is first true row index
+            localI[k] = row + edge_indexes.row_indices[1] - 1
+
+            # local columns should ALWAYS be ordered [1...N], so just grab the index
+            localJ[k] = edge_indexes.column_indices[col]
+        end
+    end
+
+    Threads.@threads for i = 1:length(block.sub_blocks)
+        sub_block = block.sub_blocks[i]
+        sub_block_data = block_data.sub_block_dict[sub_block.index]
+        jacobian_structure(sub_block, sub_block_data, I, J)
+    end
+
+    return
+end
+
+function MOI.eval_constraint_jacobian(
+    evaluator::BlockNLPEvaluator,
+    jac_values::AbstractArray,
+    x::AbstractArray
+)
+    eval_constraint_jacobian(evaluator.graph.block, evaluator.block_data, jac_values, x)
+end
+
+function eval_constraint_jacobian(
+    block::GOI.Block,
+    block_data::BlockData,
+    jac_values::AbstractArray,
+    x::AbstractArray
+)
+
+    Threads.@threads for i = 1:length(block.edges)
+        edge_index = block.edges[i].index
+        edge_model = block_data.edge_model_dict[edge_index]
+        edge_indexes = block_data.edge_index_dict[edge_index]
+        MOI.eval_constraint_jacobian(
+            edge_model,
+            view(jac_values, edge_indexes.nnzs_jac_inds),
+            view(x, edge_indexes.column_indices)
+        )
+    end
+
+    Threads.@threads for i = 1:length(block.sub_blocks)
+        sub_block = block.sub_blocks[i]
+        sub_block_data = block_data.sub_block_dict[sub_block.index]
+        eval_constraint_jacobian(sub_block, sub_block_data, jac_values, x)
+    end
+
+    return
+end
+
+### Eval_H_CB
+
+function MOI.hessian_lagrangian_structure(
+    evaluator::BlockNLPEvaluator
+)::Vector{Tuple{Int64,Int64}}
+
+    block = evaluator.graph.block
+    block_data = evaluator.block_data
+    I = Vector{Int64}(undef, block_data.nnz_hess) # row indices
+    J = Vector{Int64}(undef, block_data.nnz_hess) # column indices
+
+    hessian_lagrangian_structure(evaluator.graph.block, evaluator.block_data, I, J)
+    hessian_sparsity = collect(zip(I, J))
+
+    return hessian_sparsity
+end
+
+function hessian_lagrangian_structure(
+    block::GOI.Block,
+    block_data::BlockData,
+    I::AbstractArray,
+    J::AbstractArray
+)
+
+    Threads.@threads for i = 1:length(block.edges)
+        edge_index = block.edges[i].index
+        edge_model = block_data.edge_model_dict[edge_index]
+        edge_indexes = block_data.edge_index_dict[edge_index]
+        isempty(edge_indexes.nnzs_hess_inds) && continue
+
+        localI = view(I, edge_indexes.nnzs_hess_inds)
+        localJ = view(J, edge_indexes.nnzs_hess_inds)
+        edge_hessian_sparsity = MOI.hessian_lagrangian_structure(edge_model)
+
+        # update view with edge jacobian structure
+        for (k,(row,col)) in enumerate(edge_hessian_sparsity)
+            # map coordinates to global indices
+            localI[k] = edge_indexes.column_indices[row]
+            localJ[k] = edge_indexes.column_indices[col]
+        end
+    end
+
+    Threads.@threads for i = 1:length(block.sub_blocks)
+        sub_block = block.sub_blocks[i]
+        sub_block_data = block_data.sub_block_dict[sub_block.index]
+        hessian_lagrangian_structure(sub_block, sub_block_data, I, J)
+    end
+
+    return
+end
+
+function MOI.eval_hessian_lagrangian(
+    evaluator::BlockNLPEvaluator, 
+    hess_values::AbstractArray,
+    x::AbstractArray,
+    sigma::Float64,
+    mu::AbstractArray
+)
+    eval_hessian_lagrangian(
+        evaluator.graph.block,
+        evaluator.block_data,
+        hess_values,
+        x,
+        sigma,
+        mu
+    )
+end
+
+function eval_hessian_lagrangian(
+    block::GOI.Block,
+    block_data::BlockData,
+    hess_values::AbstractArray,
+    x::AbstractArray,
+    sigma::Float64,
+    mu::AbstractArray
+)
+
+    Threads.@threads for i = 1:length(block.edges)
+        edge_index = block.edges[i].index
+        edge_model = block_data.edge_model_dict[edge_index]
+        edge_indexes = block_data.edge_index_dict[edge_index]
+        MOI.eval_hessian_lagrangian(
+            edge_model,
+            view(hess_values, edge_indexes.nnzs_hess_inds),
+            view(x, edge_indexes.column_indices),
+            sigma,
+            view(mu, edge_indexes.row_indices)
+        )
+    end
+
+    Threads.@threads for i = 1:length(block.sub_blocks)
+        sub_block = block.sub_blocks[i]
+        sub_block_data = block_data.sub_block_dict[sub_block.index]
+        eval_hessian_lagrangian(sub_block, sub_block_data, hess_values, x, sigma, mu)
+    end
+
+    return
 end

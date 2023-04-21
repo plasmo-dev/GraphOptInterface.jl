@@ -1,5 +1,3 @@
-push!(LOAD_PATH, joinpath(@__DIR__, "../"))
-
 import MadNLP: MadNLPSolver, AbstractNLPModel, MadNLPExecutionStats, QPBlockData
 
 using MathOptInterface
@@ -8,16 +6,6 @@ const MOI = MathOptInterface
 using GraphOptInterface
 const GOI = GraphOptInterface
 using NLPModels
-
-struct _EmptyNLPEvaluator <: MOI.AbstractNLPEvaluator end
-
-MOI.features_available(::_EmptyNLPEvaluator) = [:Grad, :Jac, :Hess]
-MOI.initialize(::_EmptyNLPEvaluator, ::Any) = nothing
-MOI.eval_constraint(::_EmptyNLPEvaluator, g, x) = nothing
-MOI.jacobian_structure(::_EmptyNLPEvaluator) = Tuple{Int64,Int64}[]
-MOI.hessian_lagrangian_structure(::_EmptyNLPEvaluator) = Tuple{Int64,Int64}[]
-MOI.eval_constraint_jacobian(::_EmptyNLPEvaluator, J, x) = nothing
-MOI.eval_hessian_lagrangian(::_EmptyNLPEvaluator, H, x, σ, μ) = nothing
 
 """
     SchurOptimizer()
@@ -35,15 +23,13 @@ mutable struct SchurOptimizer <: GOI.AbstractGraphOptimizer
     solve_time::Float64
     solve_iterations::Int
 
-    #sense::MOI.ObjectiveSense
+    sense::MOI.OptimizationSense
+
     # all structure data is on a GOI.Graph
     graph::GOI.Graph
-
-    # block_data is built using Graph
-    evaluator::Union{Nothing,BlockNLPEvaluator}
 end
 
-function SchurOptimizer(; kwargs...)
+function SchurOptimizer(graph::GOI.Graph; kwargs...)
     option_dict = Dict{Symbol, Any}()
     for (name, value) in kwargs
         option_dict[name] = value
@@ -59,8 +45,7 @@ function SchurOptimizer(; kwargs...)
         NaN,
         0,
         MOI.FEASIBILITY_SENSE,
-        GOI.Graph(),
-        nothing
+        graph
     )
 end
 
@@ -71,13 +56,6 @@ end
 function MOI.get(optimizer::SchurOptimizer, ::GOI.GraphStructure)
     return optimizer.graph
 end
-
-const _SETS = Union{MOI.GreaterThan{Float64},MOI.LessThan{Float64},MOI.EqualTo{Float64}}
-
-const _FUNCTIONS = Union{
-    MOI.ScalarAffineFunction{Float64},
-    MOI.ScalarQuadraticFunction{Float64},
-}
 
 MOI.get(::SchurOptimizer, ::MOI.SolverName) = "MadNLP.Schur"
 
@@ -151,31 +129,6 @@ function MOI.get(model::SchurOptimizer, p::MOI.RawOptimizerAttribute)
     return model.options[p.name]
 end
 
-### Constraints
-
-function MOI.supports_constraint(
-    ::SchurOptimizer,
-    ::Type{<:Union{MOI.VariableIndex,_FUNCTIONS}},
-    ::Type{<:_SETS},
-)
-    return true
-end
-
-### MOI.NLPBlockDualStart
-
-MOI.supports(::SchurOptimizer, ::MOI.NLPBlockDualStart) = true
-
-### MOI.NLPBlock
-
-# function MOI.set(
-#     optimizer::SchurOptimizer,
-#     ::GOI.GraphStructureNLPBlock,
-#     nlp_data::GOI.GraphStructureNLPBlockData
-# )
-#     optimizer.nlp_data = nlp_data
-#     return
-# end
-
 ### NLP Models Wrapper
 
 struct BlockNLPModel{T} <: AbstractNLPModel{T,Vector{T}}
@@ -189,7 +142,7 @@ function BlockNLPModel(optimizer::SchurOptimizer)
     # initialize
     block_evaluator = BlockNLPEvaluator(optimizer.graph)
     MOI.initialize(block_evaluator, [:Grad, :Hess, :Jac])
-    block = optimizer.block
+    block = optimizer.graph.block
     block_data = block_evaluator.block_data
 
     # primals, lower, upper bounds
@@ -229,7 +182,8 @@ function BlockNLPModel(optimizer::SchurOptimizer)
         ),
         optimizer,
         block_evaluator,
-        NLPModels.Counters())
+        NLPModels.Counters()
+    )
 end
 
 NLPModels.obj(nlp::BlockNLPModel, x::Vector{Float64}) = MOI.eval_objective(nlp.evaluator, x)
@@ -276,9 +230,9 @@ end
 function _fill_variable_info!(block, block_data, x0, x_lower, x_upper)
     # loop through each node
     for node in block.nodes
-        ninds = block_data.node_data[node]
-        x0_node = Vector{Float64}(undef, GOI._num_variables(node))
-        for i = 1:GOI._num_variables(node)
+        ninds = block_data.node_column_dict[node.index]
+        x0_node = Vector{Float64}(undef, _num_variables(node))
+        for i = 1:_num_variables(node)
             if node.model.variable_primal_start[i] !== nothing
                 x0_node[i] = node.model.variable_primal_start[i]
             else
@@ -292,7 +246,7 @@ function _fill_variable_info!(block, block_data, x0, x_lower, x_upper)
 
     # recursively call sub-blocks
     for sub_block in block.sub_blocks
-        sub_block_data = block_data.sub_block_data[sub_block.index]
+        sub_block_data = block_data.sub_block_dict[sub_block.index]
         _fill_variable_info!(sub_block, sub_block_data, x0, x_lower, x_upper)
     end
     return
@@ -306,12 +260,12 @@ _dual_start(model::EdgeModel, value::Real, scale::Int=1) = value*scale
 function _fill_constraint_info!(block, block_data, y0, c_lower, c_upper)
     # loop through each edge
     for edge in block.edges
-        minds = block_data.edge_data[edge].row_indices
-        model = edge.model
-        g_L = copy(model.qp_data.g_L)
-        g_U = copy(model.qp_data.g_U)
+        minds = block_data.edge_indexes[edge.index].row_indices
+        edge_model = block_data.edge_models[edge.index]
+        g_L = copy(edge_model.qp_data.g_L)
+        g_U = copy(edge_model.qp_data.g_U)
 
-        for bound in model.nlp_data.constraint_bounds
+        for bound in edge_model.nlp_data.constraint_bounds
             push!(g_L, bound.lower)
             push!(g_U, bound.upper)
         end
@@ -319,11 +273,11 @@ function _fill_constraint_info!(block, block_data, y0, c_lower, c_upper)
         c_upper[minds] .= g_U
 
         # dual start
-        y0_edge = Vector{Float64}(undef, GOI._num_constraints(edge))
-        for (i, start) in enumerate(model.qp_data.mult_g)
-            y0_edge[i] = _dual_start(model, start, -1)
+        y0_edge = Vector{Float64}(undef, _num_constraints(edge))
+        for (i, start) in enumerate(edge_model.qp_data.mult_g)
+            y0_edge[i] = _dual_start(edge_model, start, -1)
         end
-        offset = length(model.qp_data.mult_g)
+        offset = length(edge_model.qp_data.mult_g)
         if model.nlp_dual_start === nothing
             y0_edge[(offset+1):end] .= 0.0
         else
@@ -336,7 +290,7 @@ function _fill_constraint_info!(block, block_data, y0, c_lower, c_upper)
 
     # recursively call sub-blocks
     for sub_block in block.sub_blocks
-        sub_block_data = block_data.sub_block_data[sub_block.index]
+        sub_block_data = block_data.sub_block_dict[sub_block.index]
         _fill_constraint_info!(sub_block, sub_block_data, y0, c_lower, c_upper)
     end
     return
@@ -382,7 +336,6 @@ function _get_one_level_partition(nlp::BlockNLPModel)
     num_con = nlp.meta.ncon
     ind_ineq = findall(get_lcon(nlp).!=get_ucon(nlp))
 
-    # TODO: explain why we separate the inequality constraints?
     columns = Vector{Int}(undef, num_var)
     rows = Vector{Int}(undef, num_con)
 
@@ -410,7 +363,6 @@ function _get_one_level_partition(nlp::BlockNLPModel)
     # get inequality partitions
     slacks = rows[ind_ineq]
     partition = [columns; slacks; rows]
-
     return partition
 end
 
