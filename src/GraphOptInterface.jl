@@ -1,14 +1,13 @@
 module GraphOptInterface
 
 using MathOptInterface
+const MOI = MathOptInterface
+const MOIU = MOI.Utilities
+
 using DataStructures
 using SparseArrays
 using Lazy
 using Graphs
-
-const MOI = MathOptInterface
-const MOIU = MOI.Utilities
-const MOIB = MOI.Bridges
 
 """
     AbstractBlockOptimizer
@@ -32,7 +31,5 @@ include("hypergraph.jl")
 include("graph.jl")
 
 include("graph_functions.jl")
-
-# include("graph_nlp_evaluator.jl")
 
 end 

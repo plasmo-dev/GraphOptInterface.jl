@@ -1,7 +1,4 @@
-push!(LOAD_PATH, "..")
-using Revise
-using Pkg
-Pkg.activate(@__DIR__())
+using MadNLPSchur
 
 using MathOptInterface
 const MOI = MathOptInterface
@@ -40,7 +37,6 @@ ci = MOI.add_constraint(
     MOI.LessThan(C0)
 )
 
-# node nonlinear constraint
 MOI.Nonlinear.add_constraint(edge0, :(1 + sqrt($(x0[1]))), MOI.LessThan(2.0))
 
 ##################################################
@@ -71,7 +67,6 @@ MOI.add_constraint(
     MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.(w1, x1), 0.0),
     MOI.LessThan(C1)
 )
-
 MOI.Nonlinear.add_constraint(edge1, :(1 + sqrt($(x1[2]))), MOI.LessThan(3.0))
 
 ##################################################
@@ -79,7 +74,6 @@ MOI.Nonlinear.add_constraint(edge1, :(1 + sqrt($(x1[2]))), MOI.LessThan(3.0))
 ##################################################
 sub_block2 = GOI.add_sub_block(graph)
 node2 = GOI.add_node(graph, sub_block2)
-
 x2 = MOI.add_variables(node2, 3)
 for x_i in x2
    MOI.add_constraint(node2, x_i, MOI.GreaterThan(0.0))
@@ -90,7 +84,6 @@ w2 = [0.2, 0.1, 1.2]
 C2 = 2.0
 
 edge2 = GOI.add_edge(graph, node2)
-
 MOI.set(
 	edge2,
 	MOI.ObjectiveFunction{MOI.ScalarAffineFunction{Float64}}(),
@@ -141,14 +134,6 @@ MOI.add_constraint(
     MOI.EqualTo(0.0)
 )
 
-# GOI.all_neighbors(graph, sub_block1)
-
-# GOI.parent_neighbors(optimizer, sub_block1)
-
-# GOI.neighbors(optimizer, sub_block1)
-
-# GOI.all_incident_edges(optimizer, sub_block1)
-
-# GOI.parent_incident_edges(optimizer, sub_block1)
-
-# GOI.incident_edges(optimizer, sub_block1)
+# build and run the schur optimizer
+optimizer = MadNLPSchur.SchurOptimizer(graph)
+MOI.optimize!(optimizer)

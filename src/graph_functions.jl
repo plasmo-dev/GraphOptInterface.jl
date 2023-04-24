@@ -46,7 +46,6 @@ function connected_nodes(graph::Graph, edge::Edge)
 	return getindex.(Ref(graph.nodes_by_index), vertices)
 end
 
-
 ### Neighbors
 
 # every neighbor including parent and child neighbors
