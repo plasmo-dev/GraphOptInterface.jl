@@ -1,10 +1,3 @@
-# GraphOptInterface.jl
-
-A graph data structure for communicating to optimization solvers.
-
-## Simple Example
-
-```julia
 using MadNLPSchur
 
 using MathOptInterface
@@ -14,7 +7,7 @@ using GraphOptInterface
 const GOI = GraphOptInterface
 
 ##################################################
-# node 1 (and edge 1)
+# node 1 and edge 1
 ##################################################
 graph = GOI.Graph()
 
@@ -53,7 +46,7 @@ MOI.Nonlinear.add_constraint(edge1, :(1.0 + sqrt($(x1[1]))), MOI.LessThan(5.0))
 
 
 ##################################################
-# node 2 (and edge 2)
+# node 2 and edge 2
 ##################################################
 node2 = GOI.add_node(graph)
 x2 = MOI.add_variables(node2, 3)
@@ -83,7 +76,7 @@ MOI.Nonlinear.add_constraint(edge2, :(1.0 + sqrt($(x2[2]))), MOI.LessThan(3.0))
 ##################################################
 edge3 = GOI.add_edge(graph, (node1, node2))
 
-# add coupling variables to the edge and map to associated node variables
+# add variables to edge
 x1 = MOI.add_variable(edge3, node1, MOI.VariableIndex(1))
 x2 = MOI.add_variable(edge3, node2, MOI.VariableIndex(1))
 x3 = MOI.add_variable(edge3, node2, MOI.VariableIndex(3))
@@ -96,7 +89,6 @@ MOI.add_constraint(
 MOI.Nonlinear.add_constraint(edge3, :(1.0 + sqrt($(x1)) + $(x3)^3), MOI.LessThan(5.0))
 MOI.set(edge3, MOI.ObjectiveSense(), MOI.MAX_SENSE)
 
-# solve with the MadNLPSchur optimizer
+# build and run the schur optimizer
 optimizer = MadNLPSchur.SchurOptimizer(graph)
 MOI.optimize!(optimizer)
-```

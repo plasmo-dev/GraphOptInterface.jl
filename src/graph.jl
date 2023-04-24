@@ -1,8 +1,3 @@
-abstract type AbstractBlock end
-abstract type AbstractNodeVariableMap end
-# abstract type NodeModelLike <: MOI.ModelLike end
-# abstract type EdgeModelLike <: MOI.ModelLike end
-
 ### BlockIndex
 
 struct BlockIndex
@@ -18,24 +13,23 @@ end
 """
 	Node
 
-A node represents a set of variables and associated bounds. A node maintains both 
-internal and external indexes for each variable. The internal indexes are used for 
-interoperability with MOI objects. The external variable indexes represent the actual 
-indices used to define constraints in an Graph.
+A node represents a set of variables and associated attributes. 
 """
 struct Node
 	index::HyperNode
 	block_index::BlockIndex
 	variables::MOIU.VariablesContainer
-	# variable attributes dual starts, etc...
+	# variable attributes primal starts, etc...
 	var_attr::Dict{MOI.AbstractVariableAttribute,Dict{MOI.VariableIndex, Any}}
 end
 function Node(vertex::HyperNode, block_index::BlockIndex)
+	var_attributes = Dict{MOI.AbstractVariableAttribute,Dict{MOI.VariableIndex, Any}}()
+	var_attributes[MOI.VariablePrimalStart()] = Dict{MOI.VariableIndex,Any}()
 	return Node(
 		vertex,
 		block_index,
 		MOIU.VariablesContainer{Float64}(),
-		Dict{MOI.AbstractVariableAttribute,Dict{MOI.VariableIndex, Any}}()
+		var_attributes
 	)
 end
 
@@ -46,13 +40,15 @@ end
 ### MOI Node Functions
 
 function MOI.add_variable(node::Node)
-	return MOI.add_variable(node.variables)
+	var = MOI.add_variable(node.variables)
+	MOI.set(node, MOI.VariablePrimalStart(), var, nothing)
+	return var
 end
 
 function MOI.add_variables(node::Node, n::Int64)
 	vars = MOI.VariableIndex[]
 	for _ = 1:n
-		push!(vars, MOI.add_variable(node.variables))
+		push!(vars, MOI.add_variable(node))
 	end
 	return vars
 end
@@ -65,7 +61,16 @@ function MOI.add_constraint(
 	return MOI.add_constraint(node.variables, variable, set)
 end
 
+function MOI.set(node::Node, attr::MOI.VariablePrimalStart, vi::MOI.VariableIndex, value::Any)
+	node.var_attr[attr][vi] = value
+end
+
+function MOI.get(node::Node, attr::MOI.VariablePrimalStart, vi::MOI.VariableIndex)
+	return node.var_attr[attr][vi]
+end
+
 ### Edge
+abstract type AbstractNodeVariableMap end
 
 struct NodeIndexMap <: AbstractNodeVariableMap
 	int_to_ext::OrderedDict{MOI.VariableIndex,Tuple{HyperNode,MOI.VariableIndex}}
