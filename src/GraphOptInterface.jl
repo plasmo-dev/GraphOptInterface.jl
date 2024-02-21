@@ -10,12 +10,10 @@ using Lazy
 using Graphs
 
 """
-    AbstractBlockOptimizer
+    AbstractGraphOptimizer
 Abstract supertype for block-structure-exploiting optimizers.
 """
 abstract type AbstractGraphOptimizer <: MOI.AbstractOptimizer end
-
-struct GraphStructure <: MOI.AbstractModelAttribute end
 
 # Block optimizer interface
 function supports_graph_interface(::MOI.AbstractOptimizer)
@@ -26,9 +24,11 @@ function supports_graph_interface(::AbstractGraphOptimizer)
     return true
 end
 
-include("hypergraph.jl")
+include("GraphViews/hypergraph.jl")
 
-include("graph.jl")
+include("GraphViews/bipartite.jl")
+
+include("optigraph.jl")
 
 include("graph_functions.jl")
 

@@ -1,55 +1,7 @@
-### Query graph
-
-function get_nodes(block::Block)
-	nodes = block.nodes
-	return block.nodes
-end
-
-function get_nodes_to_depth(block::Block, n_layers::Int=0)
-	nodes = block.nodes
-	if n_layers > 0
-		for sub_block in block.sub_blocks
-			inner_nodes = get_nodes_to_depth(sub_block, n_layers-1)
-			nodes = [nodes; inner_nodes]
-		end
-	end
-	return nodes
-end
-
-function get_edges(block::Block)
-	return block.edges
-end
-
-function all_nodes(block::Block)
-	nodes = block.nodes
-	if !isempty(block.sub_blocks)
-		for sub_block in block.sub_blocks
-			append!(nodes, all_nodes(sub_block))
-		end
-	end
-	return nodes
-end
-
-# edges attached to a single node
-function self_edges(block::Block)
-	return filter((edge) -> length(edge.index.vertices) === 1, block.edges)
-end
-
-# edges that connect nodes
-function linking_edges(block::Block)
-	return filter((edge) -> length(edge.index.vertices) > 1, block.edges)
-end
-
-# nodes connected to edge
-function connected_nodes(graph::Graph, edge::Edge)
-	vertices = edge.vertices
-	return getindex.(Ref(graph.nodes_by_index), vertices)
-end
-
 ### Neighbors
 
 # every neighbor including parent and child neighbors
-function all_neighbors(graph::Graph, nodes::Vector{Node})::Vector{Node}
+function all_neighbors(graph::OptiGraph, nodes::Vector{Node})::Vector{Node}
 	root = MOI.get(optimizer, BlockStructure())
 	vertices = index_value.(node_index.(nodes))
 	neighbor_vertices = Graphs.all_neighbors(root.graph, vertices...)

@@ -1,37 +1,62 @@
-abstract type AbstractHyperGraph <: Graphs.AbstractGraph{Int64} end
-abstract type AbstractHyperEdge <: Graphs.AbstractEdge{Int64} end
-
 const HyperNode = Int64
 
-struct HyperEdge <: AbstractHyperEdge
+struct HyperEdge <: Graphs.AbstractEdge{Int64}
     vertices::Set{HyperNode}
 end
+
 HyperEdge(t::Vector{HyperNode}) = HyperEdge(Set(t))
+
 HyperEdge(t::HyperNode...) = HyperEdge(Set(collect(t)))
 
 """
     HyperGraph
 
-A simple hypergraph type.  Contains attributes for vertices and hyperedges.
+A very simple hypergraph type.  Contains attributes for vertices and hyperedges.
 """
-mutable struct HyperGraph <: AbstractHyperGraph
-    vertices::Vector{HyperNode}
-    hyperedge_map::OrderedDict{Int64,HyperEdge}  #look up hyperedges by index in the hypergraph
-    hyperedges::OrderedDict{Set,Int64} #{Set,HyperEdge}           #look up hyperedge index using hypernodes.
-    node_map::Dict{HyperNode,Vector{HyperEdge}}  #map hypernodes to hyperedges they are incident to
+mutable struct HyperGraph <: Graphs.AbstractGraph{Int64}
+    vertices::OrderedSet{HyperNode}
+    hyperedge_map::OrderedDict{Int64,HyperEdge}
+    hyperedges::OrderedDict{Set{HyperNode},Int64}
+    node_map::OrderedDict{HyperNode,Vector{HyperEdge}}
 end
 function HyperGraph()
     return HyperGraph(
-        HyperNode[],
+        OrderedSet{HyperNode}(),
         OrderedDict{Int64,HyperEdge}(),
-        OrderedDict{Set,HyperEdge}(),
-        Dict{HyperNode,Vector{HyperEdge}}(),
+        OrderedDict{Set{HyperNode},HyperEdge}(),
+        OrderedDict{HyperNode,Vector{HyperEdge}}(),
     )
 end
 
-#HyperNode
+function Base.getindex(hypergraph::HyperGraph, node::HyperNode)
+	return node
+end
+
+function Base.getindex(hypergraph::HyperGraph, edge::HyperEdge)
+    return hypergraph.hyperedges[edge.vertices]
+end
+
+Base.reverse(e::HyperEdge) = error("`HyperEdge` does not support reverse.")
+
+# TODO: determine if we need this...
+==(h1::HyperEdge, h2::HyperEdge) = collect(h1.vertices) == collect(h2.vertices)
+
+function get_hyperedge(hypergraph::HyperGraph, edge_index::Int64)
+    return hypergraph.hyperedge_map[edge_index]
+end
+
+function get_hyperedge(hypergraph::HyperGraph, hypernodes::Set)
+    edge_index = hypergraph.hyperedges[hypernodes]
+    return hypergraph.hyperedge_map[edge_index]
+end
+
+# gethyperedges(hypergraph::HyperGraph) = values(hypergraph.hyperedges)
+
+# getedges(hypergraph::HyperGraph) = gethyperedges(hypergraph)
+
 function Graphs.add_vertex!(hypergraph::HyperGraph)
-    (nv(hypergraph) + one(Int) <= nv(hypergraph)) && return false       # test for overflow
+	# test for overflow
+    (nv(hypergraph) + one(Int) <= nv(hypergraph)) && return false   
     v = length(hypergraph.vertices) + 1
     hypernode = v
     push!(hypergraph.vertices, hypernode)
@@ -39,27 +64,12 @@ function Graphs.add_vertex!(hypergraph::HyperGraph)
     return hypernode
 end
 
-Base.getindex(hypergraph::HyperGraph, node::HyperNode) = node
-
-add_node!(hypergraph::HyperGraph) = Graphs.add_vertex!(hypergraph)
-
-getnode(hypergraph::HyperGraph, index::Int64) = hypergraph.vertices[index]
-
-getnodes(hypergraph::HyperGraph) = hypergraph.vertices
-
-#HyperEdge
-Base.reverse(e::HyperEdge) = error("A hyperedge does not support reverse()")
-Base.:(==)(h1::HyperEdge, h2::HyperEdge) = h1.vertices === h2.vertices
-function Graphs.add_edge!(graph::HyperGraph, vertices::HyperNode...)
-    return add_hyperedge!(graph, vertices...)
-end
-gethypernodes(edge::HyperEdge) = collect(edge.vertices)
-
-function add_hyperedge!(hypergraph::HyperGraph, hypernodes::HyperNode...)
-    #@assert length(hypernodes) > 1
+function Graphs.add_edge!(hypergraph::HyperGraph, hypernodes::HyperNode...)
+    @assert length(hypernodes) > 1
     hypernodes = Set(collect(hypernodes))
     if has_edge(hypergraph, hypernodes)
-        return gethyperedge(hypergraph, hypernodes)
+        return gethyperedge(hypernodes)
+        #return hypergraph.hyperedges[hypernodes]
     else
         index = ne(hypergraph) + 1
         hyperedge = HyperEdge(hypernodes...)
@@ -72,42 +82,33 @@ function add_hyperedge!(hypergraph::HyperGraph, hypernodes::HyperNode...)
     end
 end
 
-#Getters
-function gethyperedge(hypergraph::HyperGraph, edge_index::Int64)
-    return hypergraph.hyperedge_map[edge_index]
-end
-function gethyperedge(hypergraph::HyperGraph, hypernodes::Set{Int64})
-    edge_index = hypergraph.hyperedges[hypernodes]
-    return hypergraph.hyperedge_map[edge_index]
-end
+Graphs.edges(hypergraph::HyperGraph) = values(hypergraph.hyperedges)
 
-gethyperedges(hypergraph::HyperGraph) = values(hypergraph.hyperedges)
-
-getedges(hypergraph::HyperGraph) = gethyperedges(hypergraph)
-
-Graphs.vertices(hyperedge::HyperEdge) = collect(hyperedge.vertices)
-
-function Base.getindex(hypergraph::HyperGraph, edge::HyperEdge)
-    hypernodes = edge.vertices
-    return hypergraph.hyperedges[hypernodes]
-end
-
-#Graphs.jl Interface
-Graphs.edges(graph::HyperGraph) = graph.hyperedges
 Graphs.edgetype(graph::HyperGraph) = HyperEdge
+
 function Graphs.has_edge(graph::HyperGraph, edge::HyperEdge)
     return edge in values(graph.hyperedge_map)
 end
+
 function Graphs.has_edge(graph::HyperGraph, hypernodes::Set{HyperNode})
     return haskey(graph.hyperedges, hypernodes)
 end
-Graphs.has_vertex(graph::HyperGraph, v::Integer) = v in vertices(graph)
+
+Graphs.has_vertex(graph::HyperGraph, v::Integer) = v in Graphs.vertices(graph)
+
 Graphs.is_directed(graph::HyperGraph) = false
+
 Graphs.is_directed(::Type{HyperGraph}) = false
+
 Graphs.ne(graph::HyperGraph) = length(graph.hyperedge_map)
+
 Graphs.nv(graph::HyperGraph) = length(graph.vertices)
-Graphs.vertices(graph::HyperGraph) = graph.vertices
-Graphs.degree(g::HyperGraph, v::Int) = length(all_neighbors(g, v))
+
+Graphs.vertices(graph::HyperGraph) = collect(graph.vertices)
+
+Graphs.vertices(hyperedge::HyperEdge) = collect(hyperedge.vertices)
+
+Graphs.degree(g::HyperGraph, v::Int) = length(Graphs.all_neighbors(g, v))
 
 function Graphs.all_neighbors(g::HyperGraph, node::HyperNode)
     hyperedges = g.node_map[node]  #incident hyperedges to the hypernode
@@ -135,8 +136,12 @@ function Graphs.incidence_matrix(hypergraph::HyperGraph)
         end
     end
     V = Int.(ones(length(I)))
-    return SparseArrays.sparse(I, J, V)
+    m = length(hypergraph.vertices)
+    n = length(hypergraph.hyperedge_map)
+    return SparseArrays.sparse(I, J, V, m, n)
 end
+
+SparseArrays.sparse(hypergraph::HyperGraph) = Graphs.incidence_matrix(hypergraph)
 
 """
     Graphs.adjacency_matrix(hypergraph::HyperGraph)
@@ -147,7 +152,7 @@ function Graphs.adjacency_matrix(hypergraph::HyperGraph)
     I = []
     J = []
     for vertex in vertices(hypergraph)
-        for neighbor in Graphs.all_neighbors(hypergraph, vertex)
+        for neighbor in LightGraphs.all_neighbors(hypergraph, vertex)
             push!(I, vertex)
             push!(J, neighbor)
         end
@@ -156,20 +161,18 @@ function Graphs.adjacency_matrix(hypergraph::HyperGraph)
     return SparseArrays.sparse(I, J, V)
 end
 
-SparseArrays.sparse(hypergraph::HyperGraph) = Graphs.incidence_matrix(hypergraph)
-
-#HYPERGRAPH SPECIFIC FUNCTIONS
 """
     incident_edges(hypergraph::HyperGraph,hypernode::HyperNode)
 
 Identify the incident hyperedges to a `HyperNode`.
 """
-function incident_edges(g::HyperGraph, node::HyperNode)
-    hyperedges = HyperEdge[]
-    for hyperedge in g.node_map[node]
-        push!(hyperedges, hyperedge)
-    end
-    return hyperedges
+function incident_edges(hypergraph::HyperGraph, node::HyperNode)
+    # hyperedges = HyperEdge[]
+    # for hyperedge in g.node_map[node]
+    #     push!(hyperedges, hyperedge)
+    # end
+    # return hyperedges
+    return hypergraph.node_map[node]
 end
 
 """
@@ -180,7 +183,9 @@ Identify the induced hyperedges to a vector of `HyperNode`s.
 NOTE: This currently does not support hypergraphs with unconnected nodes
 """
 function induced_edges(hypergraph::HyperGraph, hypernodes::Vector{HyperNode})
-    external_nodes = setdiff(hypergraph.vertices, hypernodes) #nodes in hypergraph that aren't in hypernodes
+	# get vertices in hypergraph that are not in hypernodes
+    external_nodes = setdiff(hypergraph.vertices, hypernodes) 
+    
     #Create partition matrix
     I = []
     J = []
@@ -194,24 +199,23 @@ function induced_edges(hypergraph::HyperGraph, hypernodes::Vector{HyperNode})
         push!(I, 2)
         push!(J, j)
     end
-
     V = Int.(ones(length(J)))
     G = sparse(I, J, V)  #Node partition matrix
     A = sparse(hypergraph)
     C = G * A  #Edge partitions
 
-    #FIND THE SHARED EDGES, Get indices of shared edges
+    # find shared edges; get indices of shared edges
     sum_vector = sum(C; dims=1)
     max_vector = maximum(C; dims=1)
     cross_vector = sum_vector - max_vector
 
-    #nonzero indices of the cross vector.  these are edges that cross partitions.
+    # nonzero indices of the cross vector; these are edges that cross partitions.
     indices = findall(cross_vector .!= 0)
     indices = [indices[i].I[2] for i in 1:length(indices)]
 
     inds = findall(C[1, :] .!= 0)
     new_inds = filter(x -> !(x in indices), inds) #these are edge indices
-    induced_edges = HyperEdge[gethyperedge(hypergraph, new_ind) for new_ind in new_inds]
+    induced_edges = HyperEdge[get_hyperedge(hypergraph, new_ind) for new_ind in new_inds]
 
     return induced_edges
 end
@@ -222,36 +226,36 @@ end
 Identify the incident hyperedges to a vector of `HyperNode`s.
 """
 function incident_edges(hypergraph::HyperGraph, hypernodes::Vector{HyperNode})
+    # get vertices in hypergraph that are not in hypernodes
     external_nodes = setdiff(hypergraph.vertices, hypernodes) #nodes in hypergraph that aren't in hypernodes
-    #Create partition matrix
+    
+    # create partition matrix
     I = []
     J = []
-    for hypernode in hypernodes
-        #j = getindex(hypergraph,hypernode)
-        j = hypernode
+    for j in hypernodes
         push!(I, 1)
         push!(J, j)
     end
-    for hypernode in external_nodes
-        #j = getindex(hypergraph,hypernode)
-        j = hypernode
+    for j in external_nodes
         push!(I, 2)
         push!(J, j)
     end
 
     V = Int.(ones(length(J)))
-    G = sparse(I, J, V)  #Node partition matrix
+    # node partition matrix
+    G = sparse(I, J, V)  
     A = sparse(hypergraph)
-    C = G * A  #Edge partitions
+    # edge partitions
+    C = G * A
 
-    #FIND THE SHARED EDGES, Get indices of shared edges
+    # find shared edges; get indices of shared edges
     sum_vector = sum(C; dims=1)
     max_vector = maximum(C; dims=1)
     cross_vector = sum_vector - max_vector
-    indices = findall(cross_vector .!= 0)                   #nonzero indices of the cross vector.  These are edges that cross partitions.
+    # nonzero indices of the cross vector; these are edges that cross partitions.
+    indices = findall(cross_vector .!= 0)
     indices = [indices[i].I[2] for i in 1:length(indices)]
-
-    incident_edges = HyperEdge[gethyperedge(hypergraph, index) for index in indices]
+    incident_edges = HyperEdge[get_hyperedge(hypergraph, index) for index in indices]
 
     return incident_edges
 end
@@ -264,7 +268,7 @@ Identify both induced partition edges and cut edges given a partition of `HyperN
 function identify_edges(hypergraph::HyperGraph, partitions::Vector{Vector{HyperNode}})
     nparts = length(partitions)
 
-    #Create partition matrix
+    # create node partition matrix
     I = []
     J = []
     for i in 1:nparts
@@ -274,31 +278,30 @@ function identify_edges(hypergraph::HyperGraph, partitions::Vector{Vector{HyperN
             push!(J, j)
         end
     end
-
     V = Int.(ones(length(J)))
-    G = sparse(I, J, V)  #Node partition matrix
+    G = sparse(I, J, V)  
     A = incidence_matrix(hypergraph)
-    C = G*A  #Edge partitions
+    C = G * A  
 
-    #FIND THE SHARED EDGES, Get indices of shared edges
+    # find shared edges; i.e. get indices of shared edges
     sum_vector = sum(C; dims=1)
     max_vector = maximum(C; dims=1)
     cross_vector = sum_vector - max_vector
-    indices = findall(cross_vector .!= 0)                   #nonzero indices of the cross vector.  These are edges that cross partitions.
-    indices = [indices[i].I[2] for i in 1:length(indices)]   #convert to Integers
-
+    # get nonzero indices of the cross vector; these are edges that cross partitions.
+    indices = findall(cross_vector .!= 0)
+    indices = [indices[i].I[2] for i in 1:length(indices)]
     shared_edges = HyperEdge[]
     for index in indices
-        push!(shared_edges, gethyperedge(hypergraph, index))
+        push!(shared_edges, get_hyperedge(hypergraph, index))
     end
 
-    #GET INDUCED PARTITION EDGES (I.E GET THE EDGES LOCAL TO EACH PARTITION)
+    # get induced partition edges (i.e. edges local to each partition)
     partition_edges = Vector[Vector{HyperEdge}() for _ in 1:nparts]
     for i in 1:nparts
         inds = findall(C[i, :] .!= 0)
         new_inds = filter(x -> !(x in indices), inds) #these are edge indices
         for new_ind in new_inds
-            push!(partition_edges[i], gethyperedge(hypergraph, new_ind))
+            push!(partition_edges[i], get_hyperedge(hypergraph, new_ind))
         end
     end
 
@@ -313,7 +316,7 @@ Identify both induced partition nodes and cut nodes given a partition of `HyperE
 function identify_nodes(hypergraph::HyperGraph, partitions::Vector{Vector{HyperEdge}})
     nparts = length(partitions)
 
-    #Create partition matrix
+    # create edge partition matrix
     I = []
     J = []
     for i in 1:nparts
@@ -323,38 +326,38 @@ function identify_nodes(hypergraph::HyperGraph, partitions::Vector{Vector{HyperE
             push!(J, j)
         end
     end
-
     V = Int.(ones(length(J)))
-    G = sparse(I, J, V)  #Edge partition matrix
+    G = sparse(I, J, V)  
     A = incidence_matrix(hypergraph)
-    C = A * G'  #Node Partitions
+    C = A * G'
 
-    #FIND THE SHARED NODES, Get indices of shared nodes
+    # find the shared vertices; i.e. get indices of shared vertices
     sum_vector = sum(C; dims=2)
     max_vector = maximum(C; dims=2)
     cross_vector = sum_vector - max_vector
-    indices = findall(cross_vector .!= 0)                   #nonzero indices of the cross vector.  These are edges that cross partitions.
-    indices = [indices[i].I[1] for i in 1:length(indices)]   #convert to Integers
-
+    indices = findall(cross_vector .!= 0)
+    indices = [indices[i].I[1] for i in 1:length(indices)]
     shared_nodes = HyperNode[]
     for index in indices
-        push!(shared_nodes, getnode(hypergraph, index))
+        push!(shared_nodes, index)#getnode(hypergraph, index))
     end
 
-    #GET INDUCED PARTITION NODES (I.E GET THE NODES LOCAL TO EACH PARTITION)
+    # get induced partition vertices (i.e. get vertices local to each partition)
     partition_nodes = Vector[Vector{HyperNode}() for _ in 1:nparts]
     for i in 1:nparts
         inds = findall(C[:, i] .!= 0)
         new_inds = filter(x -> !(x in indices), inds) #these are edge indices
         for new_ind in new_inds
-            push!(partition_nodes[i], getnode(hypergraph, new_ind))
+            push!(partition_nodes[i], new_ind)#getnode(hypergraph, new_ind))
         end
     end
 
     return partition_nodes, shared_nodes
 end
 
-induced_elements(hypergraph::HyperGraph, partitions::Vector{Vector{HyperNode}}) = partitions
+function induced_elements(hypergraph::HyperGraph, partitions::Vector{Vector{HyperNode}})
+	return partitions
+end
 
 """
     neighborhood(g::HyperGraph,nodes::Vector{OptiNode},distance::Int64)
@@ -382,14 +385,6 @@ function expand(g::HyperGraph, nodes::Vector{HyperNode}, distance::Int64)
     return new_nodes, new_edges
 end
 
-#TODO
-function Graphs.rem_edge!(g::HyperGraph, e::HyperEdge)
-    throw(error("Edge removal not yet supported on hypergraphs"))
-end
-function Graphs.rem_vertex!(g::HyperGraph)
-    throw(error("Vertex removal not yet supported on hypergraphs"))
-end
-
 ####################################
 #Print Functions
 ####################################
@@ -404,3 +399,12 @@ function string(edge::HyperEdge)
 end
 print(io::IO, edge::HyperEdge) = print(io, string(edge))
 show(io::IO, edge::HyperEdge) = print(io, edge)
+
+### TODO
+
+function Graphs.rem_edge!(g::HyperGraph, e::HyperEdge)
+    throw(error("Edge removal not yet supported on hypergraphs"))
+end
+function Graphs.rem_vertex!(g::HyperGraph)
+    throw(error("Vertex removal not yet supported on hypergraphs"))
+end
