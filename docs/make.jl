@@ -1,14 +1,14 @@
-using GraphOptBase
+using GraphOptInterface
 using Documenter
 
-DocMeta.setdocmeta!(GraphOptBase, :DocTestSetup, :(using GraphOptBase); recursive=true)
+DocMeta.setdocmeta!(GraphOptInterface, :DocTestSetup, :(using GraphOptInterface); recursive=true)
 
 makedocs(;
-    modules=[GraphOptBase],
-    authors="jalving <jhjalving@gmail.com> and contributors",
-    sitename="GraphOptBase.jl",
+    modules=[GraphOptInterface],
+    authors="Jordan Jalving, Sungho Shin, and contributors",
+    sitename="GraphOptInterface.jl",
     format=Documenter.HTML(;
-        canonical="https://jalving.github.io/GraphOptBase.jl",
+        canonical="https://jalving.github.io/GraphOptInterface.jl",
         edit_link="main",
         assets=String[],
     ),
@@ -18,6 +18,6 @@ makedocs(;
 )
 
 deploydocs(;
-    repo="github.com/jalving/GraphOptBase.jl",
+    repo="github.com/plasmo-dev/GraphOptInterface.jl",
     devbranch="main",
 )

@@ -242,6 +242,17 @@ function num_all_nodes(graph::OptiGraph)
     return num
 end
 
+function all_nodes(graph::OptiGraph)
+    nodes = Node[]
+    append!(nodes, graph.nodes)
+    if !isempty(graph.subgraphs)
+        for subgraph in graph.subgraphs
+            append!(nodes, all_nodes(subgraph))
+        end
+    end
+    return nodes
+end
+
 function num_edges(graph::OptiGraph)
     return length(graph.edges)
 end
@@ -299,16 +310,6 @@ function get_nodes_to_depth(graph::OptiGraph, depth::Int=0)
         for subgraph in graph.subgraphs
             inner_nodes = get_nodes_to_depth(subgraph, depth-1)
             nodes = [nodes; inner_nodes]
-        end
-    end
-    return nodes
-end
-
-function all_nodes(graph::OptiGraph)
-    nodes = graph.nodes
-    if !isempty(graph.subgraphs)
-        for subgraph in graph.subgraphs
-            append!(nodes, all_nodes(subgraph))
         end
     end
     return nodes

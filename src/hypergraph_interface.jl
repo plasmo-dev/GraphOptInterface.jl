@@ -39,23 +39,23 @@ function Base.setindex!(hyper_map::HyperMap, node::Node, vertex::HyperNode)
     return hyper_map.node_to_hypernode_map[node] = vertex
 end
 
-function Base.getindex(hyper_map::HyperMap, hyper_edge::HyperEdge)
-    return hyper_map.hyperedge_to_edge_map[hyper_edge]
+function Base.getindex(hyper_map::HyperMap, hyperedge::HyperEdge)
+    return hyper_map.hyperedge_to_edge_map[hyperedge]
 end
 
-function Base.setindex!(hyper_map::HyperMap, hyper_edge::HyperEdge, edge::Edge)
-    return hyper_map.hyperedge_to_edge_map[edge] = hyperedge
+function Base.setindex!(hyper_map::HyperMap, hyperedge::HyperEdge, edge::Edge)
+    return hyper_map.hyperedge_to_edge_map[hyperedge] = edge
 end
 
 function Base.getindex(hyper_map::HyperMap, edge::Edge)
     return hyper_map.edge_to_hyperedge_map[edge]
 end
 
-function Base.setindex!(hyper_map::HyperMap, edge::Edge, hyper_edge::HyperEdge)
-    return hyper_map.edge_to_hyperedge_map[edge] = hyper_edge
+function Base.setindex!(hyper_map::HyperMap, edge::Edge, hyperedge::HyperEdge)
+    return hyper_map.edge_to_hyperedge_map[edge] = hyperedge
 end
 
-function build_hypergraph_view(graph::OptiGraph)
+function build_hypergraph_map(graph::OptiGraph)
 	hypergraph = HyperGraph()
 	hyper_map = HyperMap(graph, hypergraph)
 	for node in all_nodes(graph)
@@ -88,7 +88,7 @@ function get_mapped_nodes(hyper_map::HyperMap, nodes::Vector{HyperNode})
 end
 
 function get_mapped_edges(hyper_map::HyperMap, edges::Vector{Edge})
-	return getindex.(Ref(hyper_map.node_to_hypernode_map), edges)
+	return getindex.(Ref(hyper_map.edge_to_hyperedge_map), edges)
 end
 
 function get_mapped_edges(hyper_map::HyperMap, edges::Vector{HyperEdge})

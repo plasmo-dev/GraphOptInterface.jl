@@ -30,6 +30,6 @@ include("GraphViews/bipartite.jl")
 
 include("optigraph.jl")
 
-include("graph_interface.jl")
+include("hypergraph_interface.jl")
 
 end 

@@ -1,14 +1,14 @@
 ```@meta
-CurrentModule = GraphOptBase
+CurrentModule = GraphOptInterface
 ```
 
-# GraphOptBase
+# GraphOptInterface
 
-Documentation for [GraphOptBase](https://github.com/jalving/GraphOptBase.jl).
+Documentation for [GraphOptBase](https://github.com/plasmo-dev/GraphOptInterface.jl).
 
 ```@index
 ```
 
 ```@autodocs
-Modules = [GraphOptBase]
+Modules = [GraphOptInterface]
 ```

@@ -38,7 +38,6 @@ end
 
 Base.reverse(e::HyperEdge) = error("`HyperEdge` does not support reverse.")
 
-# TODO: determine if we need this...
 function Base.:(==)(h1::HyperEdge, h2::HyperEdge)
     return collect(h1.vertices) == collect(h2.vertices)
 end
@@ -80,7 +79,7 @@ function Graphs.add_edge!(hypergraph::HyperGraph, hypernodes::HyperNode...)
     end
 end
 
-Graphs.edges(hypergraph::HyperGraph) = values(hypergraph.hyperedges)
+Graphs.edges(hypergraph::HyperGraph) = values(hypergraph.hyperedge_map)
 
 Graphs.edgetype(graph::HyperGraph) = HyperEdge
 

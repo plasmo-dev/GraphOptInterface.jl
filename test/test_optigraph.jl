@@ -64,19 +64,16 @@ function test_optigraph()
 	MOI.Nonlinear.add_constraint(node1, :(1.0 + sqrt($(x1[1]))), MOI.LessThan(5.0))
 	@test length(node1.nonlinear_model.constraints) == 1
 
-
 	node2 = GOI.add_node(graph)
 	x2 = MOI.add_variables(node2, 3)
 	for x in x2
 	   MOI.add_constraint(node2, x, MOI.GreaterThan(0.0))
 	   MOI.add_constraint(node2, x, MOI.LessThan(5.0))
 	end
-
 	edge = GOI.add_edge(graph, (node1, node2))
 	@test GOI.num_edges(graph) == 1
 	@test GOI.get_nodes(edge) == [node1, node2]
 
-	# edge variables need to be defined based on corresponding nodes
 	e_x1 = MOI.add_variable(edge, node1, MOI.VariableIndex(1))
 	e_x2 = MOI.add_variable(edge, node2, MOI.VariableIndex(1))
 	e_x3 = MOI.add_variable(edge, node2, MOI.VariableIndex(3))

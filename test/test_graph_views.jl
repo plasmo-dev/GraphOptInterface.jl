@@ -27,7 +27,12 @@ function test_hypergraph()
     @test hyper.hyperedge_map[1] == GOI.HyperEdge(1, 2, 3)
     @test hyper.hyperedge_map[2] == GOI.HyperEdge(1, 2)
     @test hyper.hyperedge_map[3] == GOI.HyperEdge(1, 3, 4)
-    @test collect(Graphs.edges(hyper)) == [1, 2, 3, 4]
+    @test collect(Graphs.edges(hyper)) == [
+        GOI.HyperEdge(1, 2, 3),
+        GOI.HyperEdge(1, 2),
+        GOI.HyperEdge(1, 3, 4),
+        GOI.HyperEdge(4,5,6)
+    ]
 
     e1 = GOI.get_hyperedge(hyper, 1)
     e2 = GOI.get_hyperedge(hyper, 2)
