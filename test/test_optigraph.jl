@@ -103,16 +103,16 @@ function test_optigraph_subgraphs()
     end
 
     subgraph1 = GOI.add_subgraph(graph)
-    @assert GOI.num_subgraphs(graph) == 1
+    @test GOI.num_subgraphs(graph) == 1
 
     node1 = GOI.add_node(subgraph1)
     x1 = MOI.add_variables(node1, 3)
     for x in x1
         MOI.add_constraint(node1, x, MOI.GreaterThan(0.0))
     end
-    @assert GOI.num_nodes(graph) == 1
-    @assert GOI.num_nodes(subgraph1) == 1
-    @assert GOI.num_all_nodes(graph) == 2
+    @test GOI.num_nodes(graph) == 1
+    @test GOI.num_nodes(subgraph1) == 1
+    @test GOI.num_all_nodes(graph) == 2
 
     edge_1 = GOI.add_edge(graph, (node0, node1))
     e1_x0 = MOI.add_variable(edge_1, node0, MOI.VariableIndex(1))
@@ -122,7 +122,7 @@ function test_optigraph_subgraphs()
         MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([1.0, -1.0], [e1_x0, e1_x1]), 0.0),
         MOI.EqualTo(0.0),
     )
-    @assert GOI.num_edges(graph) == 1
+    @test GOI.num_edges(graph) == 1
 
     subgraph2 = GOI.add_subgraph(graph)
     node2 = GOI.add_node(subgraph2)
@@ -130,8 +130,8 @@ function test_optigraph_subgraphs()
     for x_i in x2
         MOI.add_constraint(node2, x_i, MOI.GreaterThan(0.0))
     end
-    @assert GOI.num_nodes(subgraph2) == 1
-    @assert GOI.num_all_nodes(graph) == 3
+    @test GOI.num_nodes(subgraph2) == 1
+    @test GOI.num_all_nodes(graph) == 3
 
     edge_2 = GOI.add_edge(graph, (node0, node2))
     e2_x0 = MOI.add_variable(edge_2, node0, MOI.VariableIndex(1))
@@ -141,7 +141,7 @@ function test_optigraph_subgraphs()
         MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([1.0, -1.0], [e2_x0, e2_x1]), 0.0),
         MOI.EqualTo(0.0),
     )
-    @assert GOI.num_edges(graph) == 2
+    @test GOI.num_edges(graph) == 2
 
     edge_3 = GOI.add_edge(graph, (node1, node2))
     e3_x1 = MOI.add_variable(edge_3, node1, MOI.VariableIndex(2))
@@ -151,7 +151,7 @@ function test_optigraph_subgraphs()
         MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([1.0, -1.0], [e3_x1, e3_x2]), 0.0),
         MOI.EqualTo(0.0),
     )
-    @assert GOI.num_edges(graph) == 3
+    @test GOI.num_edges(graph) == 3
 end
 
 function run_tests()
