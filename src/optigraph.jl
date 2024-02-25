@@ -21,12 +21,7 @@ mutable struct Node
 end
 function Node(graph_index::GraphIndex, node_index::NodeIndex)
     moi_model = MOIU.UniversalFallback(MOIU.Model{Float64}())
-    return Node(
-        graph_index,
-        node_index,
-        moi_model,
-        nothing
-    )
+    return Node(graph_index, node_index, moi_model, nothing)
 end
 
 function node_index(node::Node)::NodeIndex
@@ -46,26 +41,22 @@ end
 
 function MOI.add_variables(node::Node, n::Int64)
     vars = MOI.VariableIndex[]
-    for _ = 1:n
+    for _ in 1:n
         push!(vars, MOI.add_variable(node))
     end
     return vars
 end
 
 function MOI.add_constraint(
-    node::Node,
-    func::F,
-    set::S
-) where {F <: MOI.AbstractFunction, S <: MOI.AbstractSet}
+    node::Node, func::F, set::S
+) where {F<:MOI.AbstractFunction,S<:MOI.AbstractSet}
     ci = MOI.add_constraint(node.moi_model, func, set)
     return ci
 end
 
 function MOI.Nonlinear.add_constraint(
-    node::Node,
-    expr::Expr,
-    set::S
-) where {S <: MOI.AbstractSet}
+    node::Node, expr::Expr, set::S
+) where {S<:MOI.AbstractSet}
     node.nonlinear_model === nothing && (node.nonlinear_model = MOI.Nonlinear.Model())
     constraint_index = MOI.Nonlinear.add_constraint(node.nonlinear_model, expr, set)
     return constraint_index
@@ -107,18 +98,11 @@ mutable struct Edge
     nonlinear_model::Union{Nothing,MOI.Nonlinear.Model}
 end
 function Edge(
-    graph_index::GraphIndex, 
-    edge_index::EdgeIndex, 
-    nodes::NTuple{N,Node} where N
+    graph_index::GraphIndex, edge_index::EdgeIndex, nodes::NTuple{N,Node} where {N}
 )
     moi_model = MOIU.UniversalFallback(MOIU.Model{Float64}())
     return Edge(
-        graph_index, 
-        edge_index, 
-        OrderedSet(nodes), 
-        EdgeIndexMap(), 
-        moi_model, 
-        nothing
+        graph_index, edge_index, OrderedSet(nodes), EdgeIndexMap(), moi_model, nothing
     )
 end
 
@@ -144,26 +128,22 @@ end
 
 function MOI.add_variable(edge::Edge, node::Node, variable::MOI.VariableIndex)
     edge_variable = MOI.add_variable(edge.moi_model)
-    edge.index_map.edge_to_node_map[edge_variable] = (node,variable)
-    edge.index_map.node_to_edge_map[(node,variable)] = edge_variable
+    edge.index_map.edge_to_node_map[edge_variable] = (node, variable)
+    edge.index_map.node_to_edge_map[(node, variable)] = edge_variable
     return edge_variable
 end
 
 function MOI.add_constraint(
-    edge::Edge,
-    func::F,
-    set::S
-) where {F <: MOI.AbstractFunction, S <: MOI.AbstractSet}
+    edge::Edge, func::F, set::S
+) where {F<:MOI.AbstractFunction,S<:MOI.AbstractSet}
     # TODO: check that the variables exist on the edge index map
     ci = MOI.add_constraint(edge.moi_model, func, set)
     return ci
 end
 
 function MOI.Nonlinear.add_constraint(
-    edge::Edge,
-    expr::Expr,
-    set::S
-) where {S <: MOI.AbstractSet}
+    edge::Edge, expr::Expr, set::S
+) where {S<:MOI.AbstractSet}
     edge.nonlinear_model === nothing && (edge.nonlinear_model = MOI.Nonlinear.Model())
     constraint_index = MOI.Nonlinear.add_constraint(edge.nonlinear_model, expr, set)
     return constraint_index
@@ -174,7 +154,7 @@ function get_nodes(edge::Edge)
 end
 
 function get_edge_variable(edge::Edge, node::Node, variable::MOI.VariableIndex)
-    return edge.index_map.node_to_edge_map[(node,variable)]
+    return edge.index_map.node_to_edge_map[(node, variable)]
 end
 
 function get_node_variable(edge::Edge, variable::MOI.VariableIndex)
@@ -279,11 +259,10 @@ function MOI.get(graph::OptiGraph, attr::MOI.ListOfVariableIndices)
 end
 
 function MOI.get(
-    graph::OptiGraph,
-    attr::MOI.NumberOfConstraints{F,S}
-) where {F <: MOI.AbstractFunction, S <: MOI.AbstractSet}
-    return sum(MOI.get(edge, attr) for edge in all_edges(graph)) + 
-        sum(MOI.get(node, attr) for node in all_nodes(graph))
+    graph::OptiGraph, attr::MOI.NumberOfConstraints{F,S}
+) where {F<:MOI.AbstractFunction,S<:MOI.AbstractSet}
+    return sum(MOI.get(edge, attr) for edge in all_edges(graph)) +
+           sum(MOI.get(node, attr) for node in all_nodes(graph))
 end
 
 ### OptiGraph functions
@@ -308,7 +287,7 @@ function get_nodes_to_depth(graph::OptiGraph, depth::Int=0)
     nodes = graph.nodes
     if depth > 0
         for subgraph in graph.subgraphs
-            inner_nodes = get_nodes_to_depth(subgraph, depth-1)
+            inner_nodes = get_nodes_to_depth(subgraph, depth - 1)
             nodes = [nodes; inner_nodes]
         end
     end
@@ -320,7 +299,7 @@ end
 
 Add an edge to `graph`.
 """
-function add_edge(graph::OptiGraph, nodes::NTuple{N,Node})::Edge where N
+function add_edge(graph::OptiGraph, nodes::NTuple{N,Node})::Edge where {N}
     # we do not allow arbitrary edges. at most between two layers.
     @assert isempty(setdiff(nodes, get_nodes_to_depth(graph, 1)))
     edge_index = EdgeIndex(num_edges(graph) + 1)
@@ -359,6 +338,15 @@ end
 
 function get_subgraphs(graph::OptiGraph)
     return graph.subgraphs
+end
+
+function all_subgraphs(graph::OptiGraph)
+    subs = OptiGraph[]
+    append!(subs, graph.subgraphs)
+    for subgraph in get_subgraphs(graph)
+        append!(subs, get_subgraphs(subgraph))
+    end
+    return subs
 end
 
 function num_subgraphs(graph::OptiGraph)

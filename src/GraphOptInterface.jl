@@ -7,7 +7,7 @@ const MOIU = MOI.Utilities
 using DataStructures
 using SparseArrays
 using Lazy
-import Graphs
+using Graphs: Graphs
 
 """
     AbstractGraphOptimizer
@@ -32,4 +32,4 @@ include("optigraph.jl")
 
 include("hypergraph_interface.jl")
 
-end 
+end

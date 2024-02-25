@@ -29,7 +29,7 @@ function HyperGraph()
 end
 
 function Base.getindex(hypergraph::HyperGraph, node::HyperNode)
-	return node
+    return node
 end
 
 function Base.getindex(hypergraph::HyperGraph, edge::HyperEdge)
@@ -52,8 +52,8 @@ function get_hyperedge(hypergraph::HyperGraph, hypernodes::Set)
 end
 
 function Graphs.add_vertex!(hypergraph::HyperGraph)
-	# test for overflow
-    (Graphs.nv(hypergraph) + one(Int) <= Graphs.nv(hypergraph)) && return false   
+    # test for overflow
+    (Graphs.nv(hypergraph) + one(Int) <= Graphs.nv(hypergraph)) && return false
     v = length(hypergraph.vertices) + 1
     hypernode = v
     push!(hypergraph.vertices, hypernode)
@@ -175,9 +175,9 @@ Identify the induced hyperedges to a vector of `HyperNode`s.
 NOTE: This currently does not support hypergraphs with unconnected nodes
 """
 function induced_edges(hypergraph::HyperGraph, hypernodes::Vector{HyperNode})
-	# get vertices in hypergraph that are not in hypernodes
-    external_nodes = setdiff(hypergraph.vertices, hypernodes) 
-    
+    # get vertices in hypergraph that are not in hypernodes
+    external_nodes = setdiff(hypergraph.vertices, hypernodes)
+
     #Create partition matrix
     I = []
     J = []
@@ -220,7 +220,7 @@ Identify the incident hyperedges to a vector of `HyperNode`s.
 function incident_edges(hypergraph::HyperGraph, hypernodes::Vector{HyperNode})
     # get vertices in hypergraph that are not in hypernodes
     external_nodes = setdiff(hypergraph.vertices, hypernodes) #nodes in hypergraph that aren't in hypernodes
-    
+
     # create partition matrix
     I = []
     J = []
@@ -235,7 +235,7 @@ function incident_edges(hypergraph::HyperGraph, hypernodes::Vector{HyperNode})
 
     V = Int.(ones(length(J)))
     # node partition matrix
-    G = sparse(I, J, V)  
+    G = sparse(I, J, V)
     A = sparse(hypergraph)
     # edge partitions
     C = G * A
@@ -271,9 +271,9 @@ function identify_edges(hypergraph::HyperGraph, partitions::Vector{Vector{HyperN
         end
     end
     V = Int.(ones(length(J)))
-    G = sparse(I, J, V)  
+    G = sparse(I, J, V)
     A = Graphs.incidence_matrix(hypergraph)
-    C = G * A  
+    C = G * A
 
     # find shared edges; i.e. get indices of shared edges
     sum_vector = sum(C; dims=1)
@@ -319,7 +319,7 @@ function identify_nodes(hypergraph::HyperGraph, partitions::Vector{Vector{HyperE
         end
     end
     V = Int.(ones(length(J)))
-    G = sparse(I, J, V)  
+    G = sparse(I, J, V)
     A = Graphs.incidence_matrix(hypergraph)
     C = A * G'
 
@@ -348,7 +348,7 @@ function identify_nodes(hypergraph::HyperGraph, partitions::Vector{Vector{HyperE
 end
 
 function induced_elements(hypergraph::HyperGraph, partitions::Vector{Vector{HyperNode}})
-	return partitions
+    return partitions
 end
 
 """

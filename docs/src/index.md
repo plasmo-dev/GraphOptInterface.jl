@@ -4,7 +4,7 @@ CurrentModule = GraphOptInterface
 
 # GraphOptInterface
 
-Documentation for [GraphOptBase](https://github.com/plasmo-dev/GraphOptInterface.jl).
+Documentation for [GraphOptInterface](https://github.com/plasmo-dev/GraphOptInterface.jl).
 
 ```@index
 ```

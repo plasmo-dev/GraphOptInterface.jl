@@ -8,7 +8,6 @@ using Test
 const GOI = GraphOptInterface
 
 function test_hypergraph()
-
     hyper = GOI.HyperGraph()
     Graphs.add_vertex!(hyper)
     Graphs.add_vertex!(hyper)
@@ -31,7 +30,7 @@ function test_hypergraph()
         GOI.HyperEdge(1, 2, 3),
         GOI.HyperEdge(1, 2),
         GOI.HyperEdge(1, 3, 4),
-        GOI.HyperEdge(4,5,6)
+        GOI.HyperEdge(4, 5, 6),
     ]
 
     e1 = GOI.get_hyperedge(hyper, 1)
@@ -75,8 +74,7 @@ function test_hypergraph()
 
     partition_vector = [[1, 2, 3], [4, 5, 6]]
     p, cross = GOI.identify_edges(hyper, partition_vector)
-    @test p ==
-        [[GOI.HyperEdge(1, 2, 3), GOI.HyperEdge(1, 2)], [GOI.HyperEdge(4, 5, 6)]]
+    @test p == [[GOI.HyperEdge(1, 2, 3), GOI.HyperEdge(1, 2)], [GOI.HyperEdge(4, 5, 6)]]
     @test cross == GOI.HyperEdge[GOI.HyperEdge(1, 3, 4)]
     @test GOI.induced_elements(hyper, partition_vector) == partition_vector
 
@@ -130,9 +128,7 @@ function test_bipartite_graph()
 
     #nodes [1 and 2 and edge 4], [node 3 and edge 5]
     part_vector = [[1, 2, 4], [3, 5]]
-    p, cross = GOI.identify_separators(
-        graph, part_vector; cut_selector=Graphs.degree
-    )
+    p, cross = GOI.identify_separators(graph, part_vector; cut_selector=Graphs.degree)
     @test p == [[1, 4], [3, 5]]
     @test cross == [2]
 

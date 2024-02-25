@@ -9,7 +9,7 @@ mutable struct BipartiteGraph <: Graphs.AbstractGraph{Int64}
     vertexset2::Vector{Int64}
 end
 function BipartiteGraph()
-	return BipartiteGraph(Graphs.Graph(), Vector{Int64}(), Vector{Int64}())
+    return BipartiteGraph(Graphs.Graph(), Vector{Int64}(), Vector{Int64}())
 end
 
 function Graphs.add_vertex!(bgraph::BipartiteGraph; bipartite=1)
@@ -78,10 +78,10 @@ function identify_separators(
     end
     V = Int.(ones(length(J)))
     # node partition matrix
-    G = sparse(I, J, V)  
+    G = sparse(I, J, V)
     A = Graphs.incidence_matrix(bgraph.graph)
     # bipartite edge partitions
-    C = G * A  
+    C = G * A
 
     # find shared nodes; i.e. get indices of shared nodes
     sum_vector = sum(C; dims=1)
@@ -124,9 +124,7 @@ function identify_separators(
 end
 
 function induced_elements(
-    bgraph::BipartiteGraph, 
-    partitions::Vector; 
-    cut_selector=Graphs.degree
+    bgraph::BipartiteGraph, partitions::Vector; cut_selector=Graphs.degree
 )
     return identify_separators(bgraph, partitions; cut_selector=cut_selector)[1]
 end
