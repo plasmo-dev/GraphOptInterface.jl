@@ -1,27 +1,11 @@
-### GraphIndex
-
 struct GraphIndex
-    value::Int64
+    value::Symbol
 end
 
-function raw_index(index::GraphIndex)
-    return index.value
-end
+### Node
 
 struct NodeIndex
     value::Int64
-end
-
-function raw_index(index::GraphIndex)
-    return index.value
-end
-
-struct EdgeIndex
-    value::Int64
-end
-
-function raw_index(index::GraphIndex)
-    return index.value
 end
 
 """
@@ -29,24 +13,28 @@ end
 
 A node represents a set of variables and associated attributes. 
 """
-struct Node
-    graph::OptiGraph
+mutable struct Node
+    graph_index::GraphIndex
     index::NodeIndex
     moi_model::MOIU.UniversalFallback{MOIU.Model{Float64}}
     nonlinear_model::Union{Nothing,MOI.Nonlinear.Model}
 end
-function Node(graph::OptiGraph, index::HyperNode)
+function Node(graph_index::GraphIndex, node_index::NodeIndex)
     moi_model = MOIU.UniversalFallback(MOIU.Model{Float64}())
     return Node(
-        graph,
         graph_index,
+        node_index,
         moi_model,
         nothing
     )
 end
 
-function node_index(node::Node)::HyperNode
+function node_index(node::Node)::NodeIndex
     return node.index
+end
+
+function raw_index(node::Node)
+    return node.index.value
 end
 
 ### MOI Node Functions
@@ -64,12 +52,34 @@ function MOI.add_variables(node::Node, n::Int64)
     return vars
 end
 
+function MOI.add_constraint(
+    node::Node,
+    func::F,
+    set::S
+) where {F <: MOI.AbstractFunction, S <: MOI.AbstractSet}
+    ci = MOI.add_constraint(node.moi_model, func, set)
+    return ci
+end
+
+function MOI.Nonlinear.add_constraint(
+    node::Node,
+    expr::Expr,
+    set::S
+) where {S <: MOI.AbstractSet}
+    node.nonlinear_model === nothing && (node.nonlinear_model = MOI.Nonlinear.Model())
+    constraint_index = MOI.Nonlinear.add_constraint(node.nonlinear_model, expr, set)
+    return constraint_index
+end
+
 # forward methods so Nodes call their underlying MOI models
 
 @forward Node.moi_model (MOI.get, MOI.set)
 
-
 ### Edges
+
+struct EdgeIndex
+    value::Int64
+end
 
 struct EdgeIndexMap
     edge_to_node_map::OrderedDict{MOI.VariableIndex,Tuple{Node,MOI.VariableIndex}}
@@ -89,36 +99,48 @@ the couple variables within a single node. An Edge{Tuple{N,Node}} couple variabl
 one or more nodes.
 """
 mutable struct Edge
-    graph::OptiGraph
+    graph_index::GraphIndex
     index::EdgeIndex
     nodes::OrderedSet{Node}
     index_map::EdgeIndexMap
     moi_model::MOIU.UniversalFallback{MOIU.Model{Float64}}
     nonlinear_model::Union{Nothing,MOI.Nonlinear.Model}
 end
-
 function Edge(
-    graph::OptiGraph,
-    index::HyperEdge,
-    nodes::NTuple
-) where T <: AbstractNodeVariableMap
+    graph_index::GraphIndex, 
+    edge_index::EdgeIndex, 
+    nodes::NTuple{N,Node} where N
+)
     moi_model = MOIU.UniversalFallback(MOIU.Model{Float64}())
-    return Edge(graph, index, nodes, EdgeIndexMap(), moi_model, nothing)
+    return Edge(
+        graph_index, 
+        edge_index, 
+        OrderedSet(nodes), 
+        EdgeIndexMap(), 
+        moi_model, 
+        nothing
+    )
 end
 
-function edge_index(edge::Edge)::HyperEdge
+function edge_index(edge::Edge)::EdgeIndex
     return edge.index
 end
 
-function node_variables(edge::Edge)::Tuple
+function raw_index(edge::Edge)
+    return edge.index.value
+end
+
+"""
+    node_variables(edge::Edge)::Vector{Tuple{Node,MOI.VariableIndex}}
+
+Return a vector of tuples where each tuple contains the node and variable index
+associated with each edge variable.
+"""
+function node_variables(edge::Edge)::Vector{Tuple{Node,MOI.VariableIndex}}
     return collect(values(edge.index_map.edge_to_node_map))
 end
 
 ### MOI Edge Functions
-
-# forward methods so Edges call their underlying MOI models
-
-@forward Edge.moi_model (MOI.get, MOI.set)
 
 function MOI.add_variable(edge::Edge, node::Node, variable::MOI.VariableIndex)
     edge_variable = MOI.add_variable(edge.moi_model)
@@ -147,38 +169,47 @@ function MOI.Nonlinear.add_constraint(
     return constraint_index
 end
 
+function get_nodes(edge::Edge)
+    return collect(edge.nodes)
+end
+
+function get_edge_variable(edge::Edge, node::Node, variable::MOI.VariableIndex)
+    return edge.index_map.node_to_edge_map[(node,variable)]
+end
+
+function get_node_variable(edge::Edge, variable::MOI.VariableIndex)
+    return edge.index_map.edge_to_node_map[variable]
+end
+
+# forward methods so Edges call their underlying MOI models
+
+@forward Edge.moi_model (MOI.get, MOI.set)
+
 ### OptiGraph
 
 mutable struct OptiGraph
-    index::Int64
+    index::GraphIndex
     parent::Union{Nothing,OptiGraph}
     nodes::Vector{Node}
     edges::Vector{Edge}
     subgraphs::Vector{OptiGraph}
 
     # lookup elements by their indices
-    node_by_index::OrderedDict{HyperNode,Node}
-    edge_by_index::OrderedDict{HyperEdge,Edge}
+    node_by_index::OrderedDict{NodeIndex,Node}
+    edge_by_index::OrderedDict{EdgeIndex,Edge}
     subgraph_by_index::OrderedDict{GraphIndex,OptiGraph}
     function OptiGraph()
         graph = new()
-        graph.index = GraphIndex(0)
+        graph.index = GraphIndex(gensym())
         graph.parent = nothing
-        graph.hypergraph = HyperGraph()
         graph.nodes = Node[]
         graph.edges = Edge[]
         graph.subgraphs = Vector{OptiGraph}()
-        graph.node_by_index = OrderedDict{HyperNode,Node}()
-        graph.edge_by_index = OrderedDict{HyperEdge,Edge}()
+        graph.node_by_index = OrderedDict{NodeIndex,Node}()
+        graph.edge_by_index = OrderedDict{EdgeIndex,Edge}()
         graph.subgraph_by_index = OrderedDict{GraphIndex,OptiGraph}()
         return graph
     end
-end
-
-# nodes connected to edge
-function connected_nodes(graph::OptiGraph, edge::Edge)
-    vertices = edge.vertices
-    return getindex.(Ref(graph.nodes_by_index), vertices)
 end
 
 function Base.string(graph::OptiGraph)
@@ -190,6 +221,30 @@ function Base.string(graph::OptiGraph)
 end
 Base.print(io::IO, graph::OptiGraph) = Base.print(io, Base.string(graph))
 Base.show(io::IO, graph::OptiGraph) = Base.print(io, graph)
+
+function graph_index(graph::OptiGraph)
+    return graph.index
+end
+
+function raw_index(graph::OptiGraph)
+    return graph.index.value
+end
+
+function num_nodes(graph::OptiGraph)
+    return length(graph.nodes)
+end
+
+function num_all_nodes(graph::OptiGraph)
+    num = num_nodes(graph)
+    for subgraph in get_subgraphs(graph)
+        num += num_nodes(subgraph)
+    end
+    return num
+end
+
+function num_edges(graph::OptiGraph)
+    return length(graph.edges)
+end
 
 ### Graph MOI Functions
 
@@ -222,25 +277,41 @@ end
 
 ### OptiGraph functions
 
-function num_subgraphs(graph::OptiGraph)
-    return length(graph.subgraphs)
-end
-
-function num_all_subgraphs(graph::OptiGraph)
-    return length(graph.subgraph_by_index)
-end
-
 """
     add_node(graph::OptiGraph)::Node
 
 Add a node to `graph`. The index of the node is determined by the central graph.
 """
 function add_node(graph::OptiGraph)::Node
-    #hypernode = Graphs.add_vertex!(graph.hypergraph)
-    node_index = num_nodes(graph) + 1
-    node = Node(graph, node_index)
+    node_index = NodeIndex(num_nodes(graph) + 1)
+    node = Node(graph.index, node_index)
     push!(graph.nodes, node)
     return node
+end
+
+function get_nodes(graph::OptiGraph)
+    return graph.nodes
+end
+
+function get_nodes_to_depth(graph::OptiGraph, depth::Int=0)
+    nodes = graph.nodes
+    if depth > 0
+        for subgraph in graph.subgraphs
+            inner_nodes = get_nodes_to_depth(subgraph, depth-1)
+            nodes = [nodes; inner_nodes]
+        end
+    end
+    return nodes
+end
+
+function all_nodes(graph::OptiGraph)
+    nodes = graph.nodes
+    if !isempty(graph.subgraphs)
+        for subgraph in graph.subgraphs
+            append!(nodes, all_nodes(subgraph))
+        end
+    end
+    return nodes
 end
 
 """
@@ -251,13 +322,25 @@ Add an edge to `graph`.
 function add_edge(graph::OptiGraph, nodes::NTuple{N,Node})::Edge where N
     # we do not allow arbitrary edges. at most between two layers.
     @assert isempty(setdiff(nodes, get_nodes_to_depth(graph, 1)))
-    #hypernodes = node_index.(nodes)
-    #hyperedge = Graphs.add_edge!(graph.hypergraph, hypernodes...)
     edge_index = EdgeIndex(num_edges(graph) + 1)
-    edge = Edge(graph, edge_index, nodes)
+    edge = Edge(graph.index, edge_index, nodes)
     graph.edge_by_index[edge_index] = edge
     push!(graph.edges, edge)
     return edge
+end
+
+function get_edges(graph::OptiGraph)
+    return graph.edges
+end
+
+function all_edges(graph::OptiGraph)
+    edges = graph.edges
+    if !isempty(graph.edges)
+        for subgraph in graph.subgraphs
+            append!(edges, all_edges(subgraph))
+        end
+    end
+    return edges
 end
 
 """
@@ -268,40 +351,23 @@ Add a new subgraph to `graph`.
 function add_subgraph(graph::OptiGraph)
     subgraph = OptiGraph()
     push!(graph.subgraphs, subgraph)
-    graph.graph_by_index[subgraph.index] = subgraph
+    graph.subgraph_by_index[subgraph.index] = subgraph
     subgraph.parent = graph
-    subgraph.index = GraphIndex(number_of_subgraphs(graph))
     return subgraph
-
-    # TODO: update parent graphs
 end
 
-function get_nodes(graph::OptiGraph)
-    return graph.nodes
+function get_subgraphs(graph::OptiGraph)
+    return graph.subgraphs
 end
 
-function get_nodes_to_depth(block::Block, n_layers::Int=0)
-    nodes = block.nodes
-    if n_layers > 0
-        for sub_block in block.sub_blocks
-            inner_nodes = get_nodes_to_depth(sub_block, n_layers-1)
-            nodes = [nodes; inner_nodes]
-        end
+function num_subgraphs(graph::OptiGraph)
+    return length(graph.subgraphs)
+end
+
+function num_all_subgraphs(graph::OptiGraph)
+    num = num_subgraphs(graph)
+    for subgraph in get_subgraphs(graph)
+        num += num_subgraphs(subgraph)
     end
-    return nodes
+    return num
 end
-
-function get_edges(block::Block)
-    return block.edges
-end
-
-function all_nodes(block::Block)
-    nodes = block.nodes
-    if !isempty(block.sub_blocks)
-        for sub_block in block.sub_blocks
-            append!(nodes, all_nodes(sub_block))
-        end
-    end
-    return nodes
-end
-

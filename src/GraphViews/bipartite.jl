@@ -27,7 +27,7 @@ end
 function Graphs.add_edge!(bgraph::BipartiteGraph, from::Int64, to::Int64)
     length(intersect((from, to), bgraph.vertexset1)) == 1 ||
         error("$from and $to must be in separate vertex sets")
-    return LightGraphs.add_edge!(bgraph.graph, from, to)
+    return Graphs.add_edge!(bgraph.graph, from, to)
 end
 
 Graphs.edges(bgraph::BipartiteGraph) = Graphs.edges(bgraph.graph)
@@ -56,13 +56,13 @@ function Graphs.adjacency_matrix(bgraph::BipartiteGraph)
     n_v1 = length(bgraph.vertexset1)
     n_v2 = length(bgraph.vertexset2)
     A = spzeros(n_v1, n_v2)
-    for edge in edges(bgraph.graph)
+    for edge in Graphs.edges(bgraph.graph)
         A[edge.src, edge.dst - n_v1] = 1
     end
     return A
 end
 
-function _identify_separators(
+function identify_separators(
     bgraph::BipartiteGraph, partitions::Vector; cut_selector=Graphs.degree
 )
     nparts = length(partitions)
@@ -79,7 +79,7 @@ function _identify_separators(
     V = Int.(ones(length(J)))
     # node partition matrix
     G = sparse(I, J, V)  
-    A = LightGraphs.incidence_matrix(bgraph.graph)
+    A = Graphs.incidence_matrix(bgraph.graph)
     # bipartite edge partitions
     C = G * A  
 
@@ -92,7 +92,7 @@ function _identify_separators(
 
     # assign boundary vertices to actual cross cuts 
     # (a vertex is a cut node or a cut edge)
-    es = collect(LightGraphs.edges(bgraph.graph))
+    es = collect(Graphs.edges(bgraph.graph))
     cut_edges = es[indices]
     cross_elements = Int64[]
     for edge in cut_edges
@@ -128,5 +128,5 @@ function induced_elements(
     partitions::Vector; 
     cut_selector=Graphs.degree
 )
-    return _identify_separators(bgraph, partitions; cut_selector=cut_selector)[1]
+    return identify_separators(bgraph, partitions; cut_selector=cut_selector)[1]
 end

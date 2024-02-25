@@ -39,7 +39,9 @@ end
 Base.reverse(e::HyperEdge) = error("`HyperEdge` does not support reverse.")
 
 # TODO: determine if we need this...
-==(h1::HyperEdge, h2::HyperEdge) = collect(h1.vertices) == collect(h2.vertices)
+function Base.:(==)(h1::HyperEdge, h2::HyperEdge)
+    return collect(h1.vertices) == collect(h2.vertices)
+end
 
 function get_hyperedge(hypergraph::HyperGraph, edge_index::Int64)
     return hypergraph.hyperedge_map[edge_index]
@@ -50,13 +52,9 @@ function get_hyperedge(hypergraph::HyperGraph, hypernodes::Set)
     return hypergraph.hyperedge_map[edge_index]
 end
 
-# gethyperedges(hypergraph::HyperGraph) = values(hypergraph.hyperedges)
-
-# getedges(hypergraph::HyperGraph) = gethyperedges(hypergraph)
-
 function Graphs.add_vertex!(hypergraph::HyperGraph)
 	# test for overflow
-    (nv(hypergraph) + one(Int) <= nv(hypergraph)) && return false   
+    (Graphs.nv(hypergraph) + one(Int) <= Graphs.nv(hypergraph)) && return false   
     v = length(hypergraph.vertices) + 1
     hypernode = v
     push!(hypergraph.vertices, hypernode)
@@ -67,11 +65,11 @@ end
 function Graphs.add_edge!(hypergraph::HyperGraph, hypernodes::HyperNode...)
     @assert length(hypernodes) > 1
     hypernodes = Set(collect(hypernodes))
-    if has_edge(hypergraph, hypernodes)
-        return gethyperedge(hypernodes)
+    if Graphs.has_edge(hypergraph, hypernodes)
+        return get_hyperedge(hypernodes)
         #return hypergraph.hyperedges[hypernodes]
     else
-        index = ne(hypergraph) + 1
+        index = Graphs.ne(hypergraph) + 1
         hyperedge = HyperEdge(hypernodes...)
         for hypernode in hypernodes
             push!(hypergraph.node_map[hypernode], hyperedge)
@@ -151,8 +149,8 @@ Obtain the adjacency matrix from `hypergraph.` Returns a sparse matrix.
 function Graphs.adjacency_matrix(hypergraph::HyperGraph)
     I = []
     J = []
-    for vertex in vertices(hypergraph)
-        for neighbor in LightGraphs.all_neighbors(hypergraph, vertex)
+    for vertex in Graphs.vertices(hypergraph)
+        for neighbor in Graphs.all_neighbors(hypergraph, vertex)
             push!(I, vertex)
             push!(J, neighbor)
         end
@@ -167,11 +165,6 @@ end
 Identify the incident hyperedges to a `HyperNode`.
 """
 function incident_edges(hypergraph::HyperGraph, node::HyperNode)
-    # hyperedges = HyperEdge[]
-    # for hyperedge in g.node_map[node]
-    #     push!(hyperedges, hyperedge)
-    # end
-    # return hyperedges
     return hypergraph.node_map[node]
 end
 
@@ -280,7 +273,7 @@ function identify_edges(hypergraph::HyperGraph, partitions::Vector{Vector{HyperN
     end
     V = Int.(ones(length(J)))
     G = sparse(I, J, V)  
-    A = incidence_matrix(hypergraph)
+    A = Graphs.incidence_matrix(hypergraph)
     C = G * A  
 
     # find shared edges; i.e. get indices of shared edges
@@ -328,7 +321,7 @@ function identify_nodes(hypergraph::HyperGraph, partitions::Vector{Vector{HyperE
     end
     V = Int.(ones(length(J)))
     G = sparse(I, J, V)  
-    A = incidence_matrix(hypergraph)
+    A = Graphs.incidence_matrix(hypergraph)
     C = A * G'
 
     # find the shared vertices; i.e. get indices of shared vertices
@@ -371,7 +364,7 @@ function neighborhood(g::HyperGraph, nodes::Vector{HyperNode}, distance::Int64)
     addnbr = Int64[]
     for k in 1:distance
         for i in newnbr
-            append!(addnbr, all_neighbors(g, i)) #NOTE: union! is slow
+            append!(addnbr, Graphs.all_neighbors(g, i)) #NOTE: union! is slow
         end
         newnbr = setdiff(addnbr, nbr)
     end
