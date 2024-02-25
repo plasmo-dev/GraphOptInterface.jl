@@ -70,6 +70,6 @@ jobs:
         shell: julia --project=docs --color=yes {0}
         run: |
           using Documenter: DocMeta, doctest
-          using GraphOptBase
-          DocMeta.setdocmeta!(GraphOptBase, :DocTestSetup, :(using GraphOptBase); recursive=true)
-          doctest(GraphOptBase)
+          using GraphOptInterface
+          DocMeta.setdocmeta!(GraphOptInterface, :DocTestSetup, :(using GraphOptInterface); recursive=true)
+          doctest(GraphOptInterface)

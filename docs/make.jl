@@ -10,7 +10,7 @@ makedocs(;
     authors="Jordan Jalving, Sungho Shin, and contributors",
     sitename="GraphOptInterface.jl",
     format=Documenter.HTML(;
-        #canonical="https://jalving.github.io/GraphOptInterface.jl",
+        canonical="https://plasmo-dev.github.io/GraphOptInterface.jl",
         edit_link="main",
         assets=String[],
     ),
