@@ -1,3 +1,7 @@
+[![CI](https://github.com/plasmo-dev/GraphOptInterface.jl/workflows/CI/badge.svg)](https://github.com/plasmo-dev/GraphOptInterface.jl/actions)
+[![codecov](https://codecov.io/gh/plasmo-dev/GraphOptInterface.jl/branch/main/graph/badge.svg)](https://app.codecov.io/github/plasmo-dev/GraphOptInterface.jl)
+[![](https://img.shields.io/badge/docs-latest-blue.svg)](https://plasmo-dev.github.io/GraphOptInterface.jl/dev/)
+
 # GraphOptInterface.jl
 
 A graph data structure for communicating to optimization solvers.
