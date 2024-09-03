@@ -65,7 +65,7 @@ function Graphs.add_edge!(hypergraph::HyperGraph, hypernodes::HyperNode...)
     @assert length(hypernodes) > 1
     hypernodes = Set(collect(hypernodes))
     if Graphs.has_edge(hypergraph, hypernodes)
-        return get_hyperedge(hypernodes)
+        return get_hyperedge(hypergraph, hypernodes)
         #return hypergraph.hyperedges[hypernodes]
     else
         index = Graphs.ne(hypergraph) + 1
