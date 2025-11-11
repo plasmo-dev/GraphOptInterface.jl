@@ -15,6 +15,12 @@ Abstract supertype for block-structure-exploiting optimizers.
 """
 abstract type AbstractGraphOptimizer <: MOI.AbstractOptimizer end
 
+"""
+    supports_graph_interface(optimizer::MOI.AbstractOptimizer)
+
+Check if the given optimizer supports the graph interface. Returns `false` for standard 
+MOI optimizers and `true` for `AbstractGraphOptimizer` subtypes.
+"""
 function supports_graph_interface(::MOI.AbstractOptimizer)
     return false
 end

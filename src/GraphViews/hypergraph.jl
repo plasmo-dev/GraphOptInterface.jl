@@ -1,11 +1,32 @@
+"""
+    HyperNode
+
+Type alias for a hypernode, represented as an `Int64`.
+"""
 const HyperNode = Int64
 
+"""
+    HyperEdge
+
+A hyperedge connecting multiple hypernodes in a hypergraph.
+Contains a set of vertices (hypernodes) that the edge connects.
+"""
 struct HyperEdge <: Graphs.AbstractEdge{Int64}
     vertices::Set{HyperNode}
 end
 
+"""
+    HyperEdge(t::Vector{HyperNode})
+
+Construct a `HyperEdge` from a vector of hypernodes.
+"""
 HyperEdge(t::Vector{HyperNode}) = HyperEdge(Set(t))
 
+"""
+    HyperEdge(t::HyperNode...)
+
+Construct a `HyperEdge` from a variable number of hypernode arguments.
+"""
 HyperEdge(t::HyperNode...) = HyperEdge(Set(collect(t)))
 
 """
@@ -19,6 +40,11 @@ mutable struct HyperGraph <: Graphs.AbstractGraph{Int64}
     hyperedges::OrderedDict{Set{HyperNode},Int64}
     node_map::OrderedDict{HyperNode,Vector{HyperEdge}}
 end
+"""
+    HyperGraph()
+
+Construct an empty `HyperGraph` with no vertices or hyperedges.
+"""
 function HyperGraph()
     return HyperGraph(
         OrderedSet{HyperNode}(),
@@ -28,29 +54,64 @@ function HyperGraph()
     )
 end
 
+"""
+    Base.getindex(hypergraph::HyperGraph, node::HyperNode)
+
+Get the index of a hypernode (returns the node itself as the index).
+"""
 function Base.getindex(hypergraph::HyperGraph, node::HyperNode)
     return node
 end
 
+"""
+    Base.getindex(hypergraph::HyperGraph, edge::HyperEdge)
+
+Get the integer index of a hyperedge in the hypergraph.
+"""
 function Base.getindex(hypergraph::HyperGraph, edge::HyperEdge)
     return hypergraph.hyperedges[edge.vertices]
 end
 
+"""
+    Base.reverse(e::HyperEdge)
+
+Hyperedges do not support reversal. Throws an error.
+"""
 Base.reverse(e::HyperEdge) = error("`HyperEdge` does not support reverse.")
 
+"""
+    Base.:(==)(h1::HyperEdge, h2::HyperEdge)
+
+Check if two hyperedges are equal by comparing their vertex sets.
+"""
 function Base.:(==)(h1::HyperEdge, h2::HyperEdge)
     return collect(h1.vertices) == collect(h2.vertices)
 end
 
+"""
+    get_hyperedge(hypergraph::HyperGraph, edge_index::Int64)
+
+Get the hyperedge corresponding to the given integer index.
+"""
 function get_hyperedge(hypergraph::HyperGraph, edge_index::Int64)
     return hypergraph.hyperedge_map[edge_index]
 end
 
+"""
+    get_hyperedge(hypergraph::HyperGraph, hypernodes::Set)
+
+Get the hyperedge connecting the given set of hypernodes.
+"""
 function get_hyperedge(hypergraph::HyperGraph, hypernodes::Set)
     edge_index = hypergraph.hyperedges[hypernodes]
     return hypergraph.hyperedge_map[edge_index]
 end
 
+"""
+    Graphs.add_vertex!(hypergraph::HyperGraph)
+
+Add a new vertex (hypernode) to the hypergraph. Returns the new hypernode index.
+"""
 function Graphs.add_vertex!(hypergraph::HyperGraph)
     # test for overflow
     (Graphs.nv(hypergraph) + one(Int) <= Graphs.nv(hypergraph)) && return false
@@ -61,6 +122,12 @@ function Graphs.add_vertex!(hypergraph::HyperGraph)
     return hypernode
 end
 
+"""
+    Graphs.add_edge!(hypergraph::HyperGraph, hypernodes::HyperNode...)
+
+Add a hyperedge connecting the given hypernodes. If the hyperedge already exists,
+returns the existing hyperedge. Requires at least 2 hypernodes.
+"""
 function Graphs.add_edge!(hypergraph::HyperGraph, hypernodes::HyperNode...)
     @assert length(hypernodes) > 1
     hypernodes = Set(collect(hypernodes))
@@ -79,41 +146,107 @@ function Graphs.add_edge!(hypergraph::HyperGraph, hypernodes::HyperNode...)
     end
 end
 
+"""
+    Graphs.edges(hypergraph::HyperGraph)
+
+Return an iterator over all hyperedges in the hypergraph.
+"""
 Graphs.edges(hypergraph::HyperGraph) = values(hypergraph.hyperedge_map)
 
+"""
+    Graphs.edgetype(graph::HyperGraph)
+
+Return the edge type for a hypergraph (`HyperEdge`).
+"""
 Graphs.edgetype(graph::HyperGraph) = HyperEdge
 
+"""
+    Graphs.has_edge(graph::HyperGraph, edge::HyperEdge)
+
+Check if the hypergraph contains the given hyperedge.
+"""
 function Graphs.has_edge(graph::HyperGraph, edge::HyperEdge)
     return edge in values(graph.hyperedge_map)
 end
 
+"""
+    Graphs.has_edge(graph::HyperGraph, hypernodes::Set{HyperNode})
+
+Check if the hypergraph has a hyperedge connecting the given set of hypernodes.
+"""
 function Graphs.has_edge(graph::HyperGraph, hypernodes::Set{HyperNode})
     return haskey(graph.hyperedges, hypernodes)
 end
 
+"""
+    Graphs.has_vertex(graph::HyperGraph, v::Integer)
+
+Check if the hypergraph contains the given vertex.
+"""
 Graphs.has_vertex(graph::HyperGraph, v::Integer) = v in Graphs.vertices(graph)
 
+"""
+    Graphs.is_directed(graph::HyperGraph)
+
+Hypergraphs are undirected. Always returns `false`.
+"""
 Graphs.is_directed(graph::HyperGraph) = false
 
+"""
+    Graphs.is_directed(::Type{HyperGraph})
+
+Hypergraphs are undirected. Always returns `false`.
+"""
 Graphs.is_directed(::Type{HyperGraph}) = false
 
+"""
+    Graphs.ne(graph::HyperGraph)
+
+Return the number of hyperedges in the hypergraph.
+"""
 Graphs.ne(graph::HyperGraph) = length(graph.hyperedge_map)
 
+"""
+    Graphs.nv(graph::HyperGraph)
+
+Return the number of vertices (hypernodes) in the hypergraph.
+"""
 Graphs.nv(graph::HyperGraph) = length(graph.vertices)
 
+"""
+    Graphs.vertices(graph::HyperGraph)
+
+Return a vector of all vertices in the hypergraph.
+"""
 Graphs.vertices(graph::HyperGraph) = collect(graph.vertices)
 
+"""
+    Graphs.vertices(hyperedge::HyperEdge)
+
+Return a vector of all vertices connected by the hyperedge.
+"""
 Graphs.vertices(hyperedge::HyperEdge) = collect(hyperedge.vertices)
 
+"""
+    Graphs.degree(g::HyperGraph, v::Int)
+
+Return the degree of vertex `v` (the number of unique neighbors).
+"""
 Graphs.degree(g::HyperGraph, v::Int) = length(Graphs.all_neighbors(g, v))
 
+"""
+    Graphs.all_neighbors(g::HyperGraph, node::HyperNode)
+
+Return all neighbor nodes of the given `node` in sorted order. Neighbors are nodes
+that share at least one hyperedge with the given node.
+"""
 function Graphs.all_neighbors(g::HyperGraph, node::HyperNode)
     hyperedges = g.node_map[node]  #incident hyperedges to the hypernode
     neighbors = HyperNode[]
     for edge in hyperedges
         append!(neighbors, [vert for vert in edge.vertices if vert != node])
     end
-    return unique(neighbors)
+    return sort!(unique(neighbors))
 end
 
 """
@@ -352,9 +485,10 @@ function induced_elements(hypergraph::HyperGraph, partitions::Vector{Vector{Hype
 end
 
 """
-    neighborhood(g::HyperGraph,nodes::Vector{OptiNode},distance::Int64)
+    neighborhood(g::HyperGraph, nodes::Vector{HyperNode}, distance::Int64)
 
-Retrieve the neighborhood within `distance` of `nodes`.  Returns a vector of the original vertices and added vertices
+Retrieve the neighborhood within `distance` of `nodes`. Returns a vector containing
+the original vertices and all vertices within the specified distance.
 """
 function neighborhood(g::HyperGraph, nodes::Vector{HyperNode}, distance::Int64)
     V = collect(nodes)
@@ -371,6 +505,13 @@ function neighborhood(g::HyperGraph, nodes::Vector{HyperNode}, distance::Int64)
     return nbr
 end
 
+"""
+    expand(g::HyperGraph, nodes::Vector{HyperNode}, distance::Int64)
+
+Expand the given `nodes` by the specified `distance`. Returns a tuple of 
+`(new_nodes, new_edges)` where `new_nodes` includes all nodes within distance
+and `new_edges` are the induced hyperedges on those nodes.
+"""
 function expand(g::HyperGraph, nodes::Vector{HyperNode}, distance::Int64)
     new_nodes = neighborhood(g, nodes, distance)
     new_edges = induced_edges(g, new_nodes)
@@ -378,14 +519,25 @@ function expand(g::HyperGraph, nodes::Vector{HyperNode}, distance::Int64)
 end
 
 ####################################
-#Print Functions
+# Print Functions
 ####################################
+
+"""
+    string(graph::HyperGraph)
+
+Return a string representation of the hypergraph showing vertex and edge counts.
+"""
 function string(graph::HyperGraph)
     return "Hypergraph: " * "($(nv(graph)) , $(ne(graph)))"
 end
 print(io::IO, graph::HyperGraph) = print(io, string(graph))
 show(io::IO, graph::HyperGraph) = print(io, graph)
 
+"""
+    string(edge::HyperEdge)
+
+Return a string representation of the hyperedge showing its vertices.
+"""
 function string(edge::HyperEdge)
     return "HyperEdge: " * "$(collect(edge.vertices))"
 end

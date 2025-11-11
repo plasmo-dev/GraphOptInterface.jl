@@ -12,6 +12,11 @@ struct HyperMap
     node_to_hypernode_map::OrderedDict{Node,HyperNode}
     edge_to_hyperedge_map::OrderedDict{Edge,HyperEdge}
 end
+"""
+    HyperMap(graph::OptiGraph, hypergraph::HyperGraph)
+
+Construct a new `HyperMap` with empty mappings between the given `graph` and `hypergraph`.
+"""
 function HyperMap(graph::OptiGraph, hypergraph::HyperGraph)
     return HyperMap(
         graph,
@@ -23,38 +28,85 @@ function HyperMap(graph::OptiGraph, hypergraph::HyperGraph)
     )
 end
 
+"""
+    Base.getindex(hyper_map::HyperMap, vertex::HyperNode)
+
+Get the `Node` that corresponds to the given `vertex` in the hyper map.
+"""
 function Base.getindex(hyper_map::HyperMap, vertex::HyperNode)
     return hyper_map.hypernode_to_node_map[vertex]
 end
 
+"""
+    Base.setindex!(hyper_map::HyperMap, vertex::HyperNode, node::Node)
+
+Set the mapping from `vertex` to `node` in the hyper map.
+"""
 function Base.setindex!(hyper_map::HyperMap, vertex::HyperNode, node::Node)
     return hyper_map.hypernode_to_node_map[vertex] = node
 end
 
+"""
+    Base.getindex(hyper_map::HyperMap, node::Node)
+
+Get the `HyperNode` that corresponds to the given `node` in the hyper map.
+"""
 function Base.getindex(hyper_map::HyperMap, node::Node)
     return hyper_map.node_to_hypernode_map[node]
 end
 
+"""
+    Base.setindex!(hyper_map::HyperMap, node::Node, vertex::HyperNode)
+
+Set the mapping from `node` to `vertex` in the hyper map.
+"""
 function Base.setindex!(hyper_map::HyperMap, node::Node, vertex::HyperNode)
     return hyper_map.node_to_hypernode_map[node] = vertex
 end
 
+"""
+    Base.getindex(hyper_map::HyperMap, hyperedge::HyperEdge)
+
+Get the `Edge` that corresponds to the given `hyperedge` in the hyper map.
+"""
 function Base.getindex(hyper_map::HyperMap, hyperedge::HyperEdge)
     return hyper_map.hyperedge_to_edge_map[hyperedge]
 end
 
+"""
+    Base.setindex!(hyper_map::HyperMap, hyperedge::HyperEdge, edge::Edge)
+
+Set the mapping from `hyperedge` to `edge` in the hyper map.
+"""
 function Base.setindex!(hyper_map::HyperMap, hyperedge::HyperEdge, edge::Edge)
     return hyper_map.hyperedge_to_edge_map[hyperedge] = edge
 end
 
+"""
+    Base.getindex(hyper_map::HyperMap, edge::Edge)
+
+Get the `HyperEdge` that corresponds to the given `edge` in the hyper map.
+"""
 function Base.getindex(hyper_map::HyperMap, edge::Edge)
     return hyper_map.edge_to_hyperedge_map[edge]
 end
 
+"""
+    Base.setindex!(hyper_map::HyperMap, edge::Edge, hyperedge::HyperEdge)
+
+Set the mapping from `edge` to `hyperedge` in the hyper map.
+"""
 function Base.setindex!(hyper_map::HyperMap, edge::Edge, hyperedge::HyperEdge)
     return hyper_map.edge_to_hyperedge_map[edge] = hyperedge
 end
 
+"""
+    build_hypergraph_map(graph::OptiGraph)
+
+Build a `HyperMap` that maps the given `graph` to a `HyperGraph` representation.
+Creates hypernodes for each node and hyperedges for each edge in the graph.
+Returns the complete mapping.
+"""
 function build_hypergraph_map(graph::OptiGraph)
     hypergraph = HyperGraph()
     hyper_map = HyperMap(graph, hypergraph)
@@ -75,7 +127,7 @@ function build_hypergraph_map(graph::OptiGraph)
 end
 
 """
-	get_mapped_nodes(hyper_map::HyperMap, nodes::Vector{Node})
+    get_mapped_nodes(hyper_map::HyperMap, nodes::Vector{Node})
 
 Get the hypernode elements that correspond to the supplied optigraph `nodes`.
 """
@@ -83,14 +135,29 @@ function get_mapped_nodes(hyper_map::HyperMap, nodes::Vector{Node})
     return getindex.(Ref(hyper_map.node_to_hypernode_map), nodes)
 end
 
+"""
+    get_mapped_nodes(hyper_map::HyperMap, nodes::Vector{HyperNode})
+
+Get the optigraph `Node` elements that correspond to the supplied hypergraph `nodes`.
+"""
 function get_mapped_nodes(hyper_map::HyperMap, nodes::Vector{HyperNode})
     return getindex.(Ref(hyper_map.hypernode_to_node_map), nodes)
 end
 
+"""
+    get_mapped_edges(hyper_map::HyperMap, edges::Vector{Edge})
+
+Get the hypergraph `HyperEdge` elements that correspond to the supplied optigraph `edges`.
+"""
 function get_mapped_edges(hyper_map::HyperMap, edges::Vector{Edge})
     return getindex.(Ref(hyper_map.edge_to_hyperedge_map), edges)
 end
 
+"""
+    get_mapped_edges(hyper_map::HyperMap, edges::Vector{HyperEdge})
+
+Get the optigraph `Edge` elements that correspond to the supplied hypergraph `edges`.
+"""
 function get_mapped_edges(hyper_map::HyperMap, edges::Vector{HyperEdge})
     return getindex.(Ref(hyper_map.hyperedge_to_edge_map), edges)
 end
