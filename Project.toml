@@ -1,7 +1,7 @@
 name = "GraphOptInterface"
 uuid = "2c3d953e-07eb-42f7-9900-e75950e41d88"
 authors = ["Jordan Jalving", "Sungho Shin"]
-version = "0.1.1"
+version = "0.1.2"
 
 [deps]
 DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
